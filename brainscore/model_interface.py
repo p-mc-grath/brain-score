@@ -21,6 +21,11 @@ class BrainModel:
     task to perform
     """
 
+    Perturbation = Enum('Perturbation', " ".join(['muscimol']))
+    """
+    perturbation types
+    """
+
     def visual_degrees(self) -> int:
         """
         The visual degrees this model covers as a single scalar.
@@ -75,5 +80,15 @@ class BrainModel:
         :param recording_target: which location to record from
         :param time_bins: which time_bins to record as a list of integer tuples,
             e.g. `[(50, 100), (100, 150), (150, 200)]` or `[(70, 170)]`
+        """
+        raise NotImplementedError()
+
+    def perturb(self, perturbation: Perturbation, target, perturbation_parameters=None):
+        """
+        :param perturbation: the kind of perturbation, e.g. 'muscimol', 'optogenetics', 'microstimulation'.
+            When passed `None`, all perturbations are cleared.
+        :param target: what to perturb, e.g. 'IT', or a specific neuroid id
+        :param perturbation_parameters: details on the exact perturbation in a dictionary,
+                e.g. {'amount_microliter': 10, 'location': TODO} for muscimol.
         """
         raise NotImplementedError()

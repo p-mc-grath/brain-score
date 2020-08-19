@@ -162,6 +162,8 @@ def _experimental_benchmark_pool():
     from .cadena2017 import ToliasCadena2017PLS, ToliasCadena2017Mask
     pool['tolias.Cadena2017-pls'] = LazyLoad(ToliasCadena2017PLS)
     pool['tolias.Cadena2017-mask'] = LazyLoad(ToliasCadena2017Mask)
+    from .perturbation_prototypes import Rajalingham2019
+    pool['dicarlo.Rajalingham2019-diff'] = LazyLoad(Rajalingham2019)
 
     return pool
 
