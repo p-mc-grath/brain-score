@@ -20,7 +20,7 @@ class Rajalingham2019(BenchmarkBase):
         self._target_assembly = self._load_assembly()
         self._similarity_metric = BehaviorDifferences()
         super(Rajalingham2019, self).__init__(
-            identifier='dicarlo.Rajalingham2019',
+            identifier='dicarlo.Rajalingham2019-deficits',
             ceiling_func=None,
             version=1, parent='IT',
             paper_link='https://www.sciencedirect.com/science/article/pii/S0896627319301102')
@@ -53,12 +53,12 @@ class Rajalingham2019(BenchmarkBase):
         control_behavior['silenced'] = [False]
 
         # silencing sessions
-        random_state = RandomState(0)
         behaviors = [control_behavior]
-        for site in range(10):
-            # "We varied the location of microinjections to randomly sample the ventral surface of IT
-            # (from approximately + 8mm AP to approx + 20mm AP)."
-            injection_location = random_state.uniform(low=[8, 8], high=[20, 20])  # TODO: uniform or gaussian?
+        # "We varied the location of microinjections to randomly sample the ventral surface of IT
+        # (from approximately + 8mm AP to approx + 20mm AP)."
+        injection_locations = sample_grid_points([8, 8], [20, 20], num_x=3, num_y=3)
+        for site, injection_location in enumerate(injection_locations):
+            print(f"Perturbing at {injection_location}")
             candidate.perturb(perturbation=BrainModel.Perturbation.muscimol,
                               target='IT', perturbation_parameters={
                     # "Each inactivation session began with a single focal microinjection of 1ml of muscimol
@@ -88,7 +88,7 @@ class Rajalingham2019(BenchmarkBase):
         # behaviors = behaviors.unstack('presentation').stack(presentation=['image_id', 'run'])
         target_assembly = self._target_assembly.sel(split=0)
         score = self._similarity_metric(behaviors, target_assembly)
-        score = ceil(score, self.ceiling)
+        # score = ceil(score, self.ceiling)
         return score
 
     def _load_assembly(self):
@@ -113,7 +113,7 @@ class Rajalingham2019(BenchmarkBase):
         # additional tasks for experiment 2 only are plane-v-bear, plane-v-elephant, chair-v-bear, chair-v-elephant
         assembly = assembly.mean('bootstrap')
 
-        # TODO: load stimulus_set subsampled from hvm
+        # load stimulus_set subsampled from hvm
         stimulus_set_ids = scipy.io.loadmat(directory / 'dat/metaparams.mat')
         stimulus_set_ids = stimulus_set_ids['id']
         stimulus_set_ids = [i for i in stimulus_set_ids if len(set(i)) > 1]  # filter empty ids
@@ -136,6 +136,15 @@ class Rajalingham2019(BenchmarkBase):
         split2_diffs = split2.sel(silenced=False) - split2.sel(silenced=True)
         split_correlation, p = pearsonr(split1_diffs.values.flatten(), split2_diffs.values.flatten())
         return Score([split_correlation], coords={'aggregation': ['center']}, dims=['aggregation'])
+
+
+def sample_grid_points(low, high, num_x, num_y):
+    assert len(low) == len(high) == 2
+    grid_x, grid_y = np.meshgrid(np.linspace(low[0], high[0], num_x),
+                                 np.linspace(low[1], high[1], num_y))
+    return np.array(list(zip(grid_x.flatten(), grid_y.flatten())))
+    # TODO: could we also do
+    # return np.dstack((grid_x, grid_y))
 
 
 class Kar2020:
