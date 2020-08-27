@@ -5,7 +5,7 @@ from scipy.stats import pearsonr
 from tqdm import tqdm
 
 from brainio_base.assemblies import merge_data_arrays, walk_coords, array_is_element
-from brainscore.metrics import Metric
+from brainscore.metrics import Metric, Score
 from brainscore.metrics.image_level_behavior import I2n
 
 from brainscore.metrics.transformations import TestOnlyCrossValidationSingle, CrossValidation
@@ -34,12 +34,11 @@ class BehaviorDifferences(Metric):
         # compare
         site_split = TestOnlyCrossValidationSingle(  # instantiate on-the-fly to control the kfolds for 1 test site each
             split_coord='site', stratification_coord=None, kfold=True, splits=len(assembly2['site']))
-        site_scores = site_split(assembly2_differences,
+        score = site_split(assembly2_differences,
                                  apply=lambda site_assembly: self.apply_site(assembly1_differences, site_assembly))
-        score = site_scores.mean('site')
         return score
 
-    @store(identifier_ignore=['assembly'])
+    # @store(identifier_ignore=['assembly'])
     def characterize(self, assembly):
         """ compute per-task performance from `presentation x choice` assembly """
         # xarray can't do multi-dimensional grouping, do things manually
@@ -89,7 +88,9 @@ class BehaviorDifferences(Metric):
                                      kfold=True, splits=len(site_target_assembly['task']))
         task_scores = task_split(source_assembly, site_target_assembly, apply=self.apply_task)
         task_scores = task_scores.raw
-        return task_scores
+        correlation, p = pearsonr(task_scores.sel(type='source'), task_scores.sel(type='target'))
+        score = Score([correlation, p], coords={'statistic': ['r', 'p']}, dims=['statistic'])
+        return score
 
     def apply_task(self, source_train, target_train, source_test, target_test):
         """
@@ -98,7 +99,7 @@ class BehaviorDifferences(Metric):
         :param target_train: target assembly for mapping with t tasks
         :param source_test: source assembly for testing with 1 task and n sites
         :param target_test: target assembly for testing with 1 task
-        :return: a Score
+        :return: a pair
         """
         # map: find site in assembly1 that best matches mapping tasks
         correlations = {}
@@ -108,8 +109,9 @@ class BehaviorDifferences(Metric):
             correlation = pearsonr(source_site.values, target_train.values)
             correlations[site] = correlation
         best_site = [site for site, correlation in correlations.items() if correlation == max(correlations.values())]
+        best_site = best_site[0]  # choose first one if there are multiple
         # test: predictivity of held-out task
-        source_test = source_test.sel(site=best_site).squeeze('site')
+        source_test = source_test.sel(site=best_site)
         np.testing.assert_array_equal(source_test['task'].values, target_test['task'].values)
         pair = type(target_test)([source_test.values[0], target_test.values[0]],
                                  coords={  # 'task': source_test['task'].values,
