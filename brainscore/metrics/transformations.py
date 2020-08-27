@@ -167,7 +167,7 @@ class Split:
         splits = 10
         train_size = .9
         split_coord = 'image_id'
-        stratification_coord = 'object_name'  # cross-validation across images, balancing objects
+        stratification_coord = None
         unique_split_values = False
         random_state = 1
 
@@ -228,7 +228,8 @@ def extract_coord(assembly, coord, unique=False):
     dims = assembly[coord].dims
     assert len(dims) == 1
     extracted_assembly = xr.DataArray(coord_values, coords={coord: coord_values}, dims=[coord])
-    extracted_assembly = extracted_assembly.stack(**{dims[0]: (coord,)})
+    if dims[0] != coord:  # if we're dealing with MultiIndex, re-stack
+        extracted_assembly = extracted_assembly.stack(**{dims[0]: (coord,)})
     return extracted_assembly if not unique else extracted_assembly, indices
 
 
@@ -251,14 +252,9 @@ class TestOnlyCrossValidation:
 
 
 class CrossValidationSingle(Transformation):
-    def __init__(self,
-                 splits=Split.Defaults.splits, train_size=None, test_size=None,
-                 split_coord=Split.Defaults.split_coord, stratification_coord=Split.Defaults.stratification_coord,
-                 unique_split_values=Split.Defaults.unique_split_values, random_state=Split.Defaults.random_state):
+    def __init__(self, *args, **kwargs):
         super().__init__()
-        self._split = Split(splits=splits, split_coord=split_coord,
-                            stratification_coord=stratification_coord, unique_split_values=unique_split_values,
-                            train_size=train_size, test_size=test_size, random_state=random_state)
+        self._split = Split(*args, **kwargs)
         self._logger = logging.getLogger(fullname(self))
 
     def pipe(self, assembly):
