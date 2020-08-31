@@ -93,23 +93,23 @@ class Rajalingham2019(BenchmarkBase):
 
     def _load_assembly(self):
         directory = Path('/braintree/home/msch/rr_share_topo/topoDCNN/')
-        with open(directory / f'dat/HVM8_1/rajalingham2018_k2_all.pkl', 'rb') as f:
+        with open(directory / f'dat/HVM8_1/rajalingham2018_k1_all.pkl', 'rb') as f:
             exp = pickle.load(f, encoding='latin1')
         exp = exp['all_sites']
         tasks, sites = 6, 11
         rearrange = functools.partial(self._rearrange_sites_tasks, tasks_per_site=tasks, number_of_sites=sites)
         exp['d0'], exp['d1'] = rearrange(exp['d0']), rearrange(exp['d1'])
+        task_names = ['bear', 'ELEPHANT_M', '_18', 'face0001', 'alfa155', 'breed_pug', 'TURTLE_L', 'Apple_Fruit_obj',
+                      'f16', '_001']  # first half of MURI20 image set, intersects with hvm set
+        task_ids = [[1, 0], [5, 0], [5, 1], [8, 5], [9, 5], [9, 8]]
         assembly = DataAssembly([exp['d0'], exp['d1']], coords={
             'silenced': [False, True],
-            'split': np.arange(exp['d0'].shape[1]),
             'bootstrap': np.arange(exp['d0'].shape[0]),
             'task_number': ('task', np.arange(tasks)),
-            # TODO: actually assign these.
-            #  paper tasks are elephant-v-bear, dog-v-bear, dog-v-elephant, plane-v-dog, chair-v-dog, chair-v-plane
-            'task_left': ('task', ['elephant', 'dog', 'dog', 'airplane3', 'chair0', 'chair0']),
-            'task_right': ('task', ['bear', 'bear', 'elephant', 'dog', 'dog', 'airplane3']),
+            'task_left': ('task', [task_names[id_left] for id_left, id_right in task_ids]),
+            'task_right': ('task', [task_names[id_right] for id_left, id_right in task_ids]),
             'site': np.arange(sites)},
-                                dims=['silenced', 'bootstrap', 'split', 'task', 'site'])
+                                dims=['silenced', 'bootstrap', 'task', 'site'])
         # additional tasks for experiment 2 only are plane-v-bear, plane-v-elephant, chair-v-bear, chair-v-elephant
         assembly = assembly.mean('bootstrap')
 
