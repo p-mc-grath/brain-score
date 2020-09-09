@@ -1,9 +1,6 @@
-import functools
-import pickle
-from pathlib import Path
-
 import numpy as np
-from numpy.random.mtrand import RandomState
+import scipy.io
+from pathlib import Path
 from scipy.stats import pearsonr
 
 import brainscore
@@ -12,7 +9,6 @@ from brainscore.benchmarks import BenchmarkBase
 from brainscore.metrics import Score
 from brainscore.metrics.behavior_differences import BehaviorDifferences
 from brainscore.model_interface import BrainModel
-import scipy.io
 
 
 class Rajalingham2019(BenchmarkBase):
@@ -92,29 +88,47 @@ class Rajalingham2019(BenchmarkBase):
         return score
 
     def _load_assembly(self):
-        directory = Path('/braintree/home/msch/rr_share_topo/topoDCNN/')
-        with open(directory / f'dat/HVM8_1/rajalingham2018_k1_all.pkl', 'rb') as f:
-            exp = pickle.load(f, encoding='latin1')
-        exp = exp['all_sites']
-        tasks, sites = 6, 11
-        rearrange = functools.partial(self._rearrange_sites_tasks, tasks_per_site=tasks, number_of_sites=sites)
-        exp['d0'], exp['d1'] = rearrange(exp['d0']), rearrange(exp['d1'])
-        task_names = ['bear', 'ELEPHANT_M', '_18', 'face0001', 'alfa155', 'breed_pug', 'TURTLE_L', 'Apple_Fruit_obj',
-                      'f16', '_001']  # first half of MURI20 image set, intersects with hvm set
-        task_ids = [[1, 0], [5, 0], [5, 1], [8, 5], [9, 5], [9, 8]]
-        assembly = DataAssembly([exp['d0'], exp['d1']], coords={
-            'silenced': [False, True],
-            'bootstrap': np.arange(exp['d0'].shape[0]),
-            'task_number': ('task', np.arange(tasks)),
-            'task_left': ('task', [task_names[id_left] for id_left, id_right in task_ids]),
-            'task_right': ('task', [task_names[id_right] for id_left, id_right in task_ids]),
-            'site': np.arange(sites)},
-                                dims=['silenced', 'bootstrap', 'task', 'site'])
-        # additional tasks for experiment 2 only are plane-v-bear, plane-v-elephant, chair-v-bear, chair-v-elephant
-        assembly = assembly.mean('bootstrap')
+        path = Path(__file__).parent / 'Rajalingham2019_data_summary.mat'
+        data = scipy.io.loadmat(path)['data_summary']
+        struct = {d[0]: v for d, v in zip(data.dtype.descr, data[0, 0])}
+        tasks = [v[0] for v in struct['O2_task_names'][:, 0]]
+        tasks_left, tasks_right = zip(*[task.split(' vs. ') for task in tasks])
+        k1 = {d[0]: v for d, v in zip(struct['k1'].dtype.descr, struct['k1'][0, 0])}
+
+        class missing_dict(dict):
+            def __missing__(self, key):
+                return key
+
+        dim_replace = missing_dict({'sub_metric': 'hemisphere', 'nboot': 'bootstrap', 'exp': 'site',
+                                    'niter': 'trial_split', 'subj': 'subject'})
+        dims = [dim_replace[v[0]] for v in k1['dim_labels'][0]]
+        subjects = [v[0] for v in k1['subjs'][0]]
+        conditions, subjects = zip(*[subject.split('_') for subject in subjects])
+        metrics = [v[0] for v in k1['metrics'][0]]
+        assembly = DataAssembly([k1['D0'], k1['D1']],
+                                coords={
+                                    'silenced': [True, False],
+                                    'condition': (dim_replace['subj'], list(conditions)),
+                                    'subject_id': (dim_replace['subj'], list(subjects)),
+                                    'metric': metrics,
+                                    dim_replace['sub_metric']: ['all', 'ipsi', 'contra'],
+                                    # autofill
+                                    dim_replace['niter']: np.arange(k1['D0'].shape[3]),
+                                    dim_replace['k']: np.arange(k1['D0'].shape[4]),
+                                    dim_replace['nboot']: np.arange(k1['D0'].shape[5]),
+                                    dim_replace['exp']: np.arange(k1['D0'].shape[6]),
+                                    'task': np.arange(k1['D0'].shape[7]),
+                                },
+                                dims=['silenced'] + dims)
+        assembly = assembly.squeeze('k').squeeze('trial_split')
+        assembly = assembly.sel(hemisphere='all')
+        assembly = assembly.sel(metric='o2_dp')
+        assembly['task_left'] = 'task', list(tasks_left)
+        assembly['task_right'] = 'task', list(tasks_right)
+        assembly = assembly.mean('subject')
 
         # load stimulus_set subsampled from hvm
-        stimulus_set_ids = scipy.io.loadmat(directory / 'dat/metaparams.mat')
+        stimulus_set_ids = scipy.io.loadmat('/braintree/home/msch/rr_share_topo/topoDCNN/dat/metaparams.mat')
         stimulus_set_ids = stimulus_set_ids['id']
         stimulus_set_ids = [i for i in stimulus_set_ids if len(set(i)) > 1]  # filter empty ids
         stimulus_set = brainscore.get_stimulus_set('dicarlo.hvm')
