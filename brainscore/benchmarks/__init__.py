@@ -18,6 +18,7 @@ class Benchmark(ABC):
     """
     Standard Benchmark interface defining the method interfaces.
     """
+
     def __call__(self, candidate: BrainModel):
         """
         Evaluate a candidate `BrainModel` and return a :class:`~brainscore.metrics.Score` denoting the brain-likeness of
@@ -33,6 +34,14 @@ class Benchmark(ABC):
         :return: a :class:`~brainscore.metrics.Score` of how brain-like the candidate model is under this benchmark. The
                 score is normalized by this benchmark's ceiling such that 1 means the model matches the data to ceiling
                 level.
+        """
+        raise NotImplementedError()
+
+    @property
+    def bibtex(self):
+        """
+        bibtex string to build the reference.
+        Should include an `url` to build a proper link.
         """
         raise NotImplementedError()
 
@@ -73,12 +82,17 @@ class BenchmarkBase(Benchmark):
     """
     Helper class for implementing standard functions of the `Benchmark` interface.
     """
-    def __init__(self, identifier, ceiling_func, version, parent=None, paper_link=None):
+
+    def __init__(self, identifier, ceiling_func, version, parent=None, bibtex=None):
         self._identifier = identifier
         self._ceiling_func = ceiling_func
         self._version = version
         self.parent = parent
-        self.paper_link = paper_link
+        self._bibtex = bibtex
+
+    @property
+    def bibtex(self):
+        return self._bibtex
 
     @property
     def identifier(self):
@@ -139,6 +153,12 @@ def _engineering_benchmark_pool():
     from .imagenet import Imagenet2012
     pool['fei-fei.Deng2009-top1'] = LazyLoad(Imagenet2012)
 
+    from .imagenet_c import Imagenet_C_Noise, Imagenet_C_Blur, Imagenet_C_Weather, Imagenet_C_Digital
+    pool['dietterich.Hendrycks2019-noise-top1'] = LazyLoad(Imagenet_C_Noise)
+    pool['dietterich.Hendrycks2019-blur-top1'] = LazyLoad(Imagenet_C_Blur)
+    pool['dietterich.Hendrycks2019-weather-top1'] = LazyLoad(Imagenet_C_Weather)
+    pool['dietterich.Hendrycks2019-digital-top1'] = LazyLoad(Imagenet_C_Digital)
+
     return pool
 
 
@@ -162,6 +182,17 @@ def _experimental_benchmark_pool():
     from .cadena2017 import ToliasCadena2017PLS, ToliasCadena2017Mask
     pool['tolias.Cadena2017-pls'] = LazyLoad(ToliasCadena2017PLS)
     pool['tolias.Cadena2017-mask'] = LazyLoad(ToliasCadena2017Mask)
+    from .sanghavi2020 import DicarloSanghavi2020V4PLS, DicarloSanghavi2020ITPLS
+    pool['dicarlo.Sanghavi2020.V4-pls'] = LazyLoad(DicarloSanghavi2020V4PLS)
+    pool['dicarlo.Sanghavi2020.IT-pls'] = LazyLoad(DicarloSanghavi2020ITPLS)
+    from .sanghavijozwik2020 import DicarloSanghaviJozwik2020V4PLS, DicarloSanghaviJozwik2020ITPLS
+    pool['dicarlo.SanghaviJozwik2020.V4-pls'] = LazyLoad(DicarloSanghaviJozwik2020V4PLS)
+    pool['dicarlo.SanghaviJozwik2020.IT-pls'] = LazyLoad(DicarloSanghaviJozwik2020ITPLS)
+    from .sanghavimurty2020 import DicarloSanghaviMurty2020V4PLS, DicarloSanghaviMurty2020ITPLS
+    pool['dicarlo.SanghaviMurty2020.V4-pls'] = LazyLoad(DicarloSanghaviMurty2020V4PLS)
+    pool['dicarlo.SanghaviMurty2020.IT-pls'] = LazyLoad(DicarloSanghaviMurty2020ITPLS)
+    from .rajalingham2020 import DicarloRajalingham2020ITPLS
+    pool['dicarlo.Rajalingham2020.IT-pls'] = LazyLoad(DicarloRajalingham2020ITPLS)
     from .perturbation_prototypes import Rajalingham2019
     pool['dicarlo.Rajalingham2019-diff'] = LazyLoad(Rajalingham2019)
 

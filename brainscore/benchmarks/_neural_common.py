@@ -7,7 +7,7 @@ from brainscore.model_interface import BrainModel
 
 
 class NeuralBenchmark(BenchmarkBase):
-    def __init__(self, identifier, assembly, similarity_metric, visual_degrees, **kwargs):
+    def __init__(self, identifier, assembly, similarity_metric, visual_degrees, number_of_trials, **kwargs):
         super(NeuralBenchmark, self).__init__(identifier=identifier, **kwargs)
         self._assembly = assembly
         self._similarity_metric = similarity_metric
@@ -17,12 +17,13 @@ class NeuralBenchmark(BenchmarkBase):
         timebins = timebins_from_assembly(self._assembly)
         self.timebins = timebins
         self._visual_degrees = visual_degrees
+        self._number_of_trials = number_of_trials
 
     def __call__(self, candidate: BrainModel):
         candidate.start_recording(self.region, time_bins=self.timebins)
         stimulus_set = place_on_screen(self._assembly.stimulus_set, target_visual_degrees=candidate.visual_degrees(),
                                        source_visual_degrees=self._visual_degrees)
-        source_assembly = candidate.look_at(stimulus_set)
+        source_assembly = candidate.look_at(stimulus_set, number_of_trials=self._number_of_trials)
         if 'time_bin' in source_assembly.dims:
             source_assembly = source_assembly.squeeze('time_bin')  # static case for these benchmarks
         raw_score = self._similarity_metric(source_assembly, self._assembly)
