@@ -1,9 +1,10 @@
-import logging
 from collections import Counter
 
 import itertools
+import logging
 import numpy as np
 import scipy.stats
+import xarray
 from numpy.random.mtrand import RandomState
 from scipy.stats import pearsonr
 
@@ -27,6 +28,19 @@ def I2(*args, **kwargs):
 
 def I2n(*args, **kwargs):
     return _I(*args, collapse_distractors=False, normalize=True, **kwargs)
+
+
+def _o2(assembly):
+    i2n = I2n()
+    false_alarm_rates = i2n.target_distractor_scores(assembly)
+    false_alarm_rates_object = false_alarm_rates.groupby('truth').mean('presentation')
+    false_alarm_rates_object = false_alarm_rates_object.rename({'truth': 'task_left', 'choice': 'task_right'})
+    # hit rates are one minus the flipped false alarm rates, e.g. HR(dog, cat) = 1 - FAR(cat, dog)
+    hit_rates_object = 1 - false_alarm_rates_object.rename({'task_left': 'task_right', 'task_right': 'task_left'})
+    dprime_false_alarms_rates_object = xarray.apply_ufunc(i2n.z_score, false_alarm_rates_object)
+    dprime_hit_rates_object = xarray.apply_ufunc(i2n.z_score, hit_rates_object)
+    o2 = dprime_hit_rates_object - dprime_false_alarms_rates_object
+    return o2
 
 
 class _I(Metric):

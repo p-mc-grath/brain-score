@@ -4,18 +4,15 @@ import numpy as np
 from scipy.stats import pearsonr
 from tqdm import tqdm
 
-from brainio_base.assemblies import merge_data_arrays, walk_coords, array_is_element
+from brainio_base.assemblies import merge_data_arrays, walk_coords, array_is_element, DataAssembly
 from brainscore.metrics import Metric, Score
-from brainscore.metrics.image_level_behavior import I2n
+from brainscore.metrics.image_level_behavior import I2n, _o2
 
 from brainscore.metrics.transformations import TestOnlyCrossValidationSingle, CrossValidation
 from result_caching import store
 
 
 class BehaviorDifferences(Metric):
-    def __init__(self):
-        self.i2n = I2n()
-
     def __call__(self, assembly1, assembly2):
         """
         :param assembly1: a tuple with the first element representing the control behavior in the format of
@@ -35,7 +32,7 @@ class BehaviorDifferences(Metric):
         site_split = TestOnlyCrossValidationSingle(  # instantiate on-the-fly to control the kfolds for 1 test site each
             split_coord='site', stratification_coord=None, kfold=True, splits=len(assembly2['site']))
         score = site_split(assembly2_differences,
-                                 apply=lambda site_assembly: self.apply_site(assembly1_differences, site_assembly))
+                           apply=lambda site_assembly: self.apply_site(assembly1_differences, site_assembly))
         return score
 
     # @store(identifier_ignore=['assembly'])
@@ -47,21 +44,15 @@ class BehaviorDifferences(Metric):
         for silenced, site in tqdm(itertools.product(*adjacent_values), desc='characterize',
                                    total=np.prod([len(values) for values in adjacent_values])):
             current_assembly = assembly.sel(silenced=silenced, site=site)
-            o2 = self.o2(current_assembly)
+            o2 = _o2(current_assembly)
             o2 = o2.expand_dims('silenced').expand_dims('site')
             o2['silenced'] = [silenced]
             for (coord, _, _), value in zip(walk_coords(assembly['site']), site):
                 o2[coord] = 'site', [value]
+            o2 = DataAssembly(o2)  # ensure multi-index on site
             o2s.append(o2)
         o2s = merge_data_arrays(o2s)  # this only takes ~1s, ok
         return o2s
-
-    def o2(self, assembly):
-        response_matrix = self.i2n.target_distractor_scores(assembly)
-        i2 = self.i2n.dprimes(response_matrix)
-        o2 = i2.groupby('truth').mean('presentation')
-        o2 = o2.rename({'truth': 'task_left', 'choice': 'task_right'})
-        return o2
 
     def subselect_tasks(self, assembly, reference_assembly):
         tasks_left, tasks_right = reference_assembly['task_left'].values, reference_assembly['task_right'].values
