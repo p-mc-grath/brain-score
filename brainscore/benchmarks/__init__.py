@@ -194,7 +194,7 @@ def _experimental_benchmark_pool():
     from .rajalingham2020 import DicarloRajalingham2020ITPLS
     pool['dicarlo.Rajalingham2020.IT-pls'] = LazyLoad(DicarloRajalingham2020ITPLS)
     from .perturbation_prototypes import Rajalingham2019
-    pool['dicarlo.Rajalingham2019-diff'] = LazyLoad(Rajalingham2019)
+    pool['dicarlo.Rajalingham2019-deficits'] = LazyLoad(Rajalingham2019)
 
     return pool
 

@@ -4,11 +4,29 @@ from pathlib import Path
 from scipy.stats import pearsonr
 
 import brainscore
-from brainio_base.assemblies import DataAssembly, merge_data_arrays
+from brainio_base.assemblies import DataAssembly, merge_data_arrays, walk_coords
 from brainscore.benchmarks import BenchmarkBase
 from brainscore.metrics import Score
 from brainscore.metrics.behavior_differences import BehaviorDifferences
 from brainscore.model_interface import BrainModel
+
+BIBTEX = """@article(...,
+url=https://www.sciencedirect.com/science/article/pii/S0896627319301102
+)
+"""
+
+TASK_LOOKUP = {
+    'dog': 'Dog',
+    # 'face0': '',
+    # 'table4': '',
+    'bear': 'Bear',
+    # 'apple': '',
+    'elephant': 'Elephant',
+    'airplane3': 'Plane',
+    # 'turtle': '',
+    # 'car_alfa': '',
+    'chair0': 'Chair'
+}
 
 
 class Rajalingham2019(BenchmarkBase):
@@ -19,7 +37,7 @@ class Rajalingham2019(BenchmarkBase):
             identifier='dicarlo.Rajalingham2019-deficits',
             ceiling_func=None,
             version=1, parent='IT',
-            paper_link='https://www.sciencedirect.com/science/article/pii/S0896627319301102')
+            bibtex=BIBTEX)
 
     def __call__(self, candidate: BrainModel):
         # approach:
@@ -44,7 +62,7 @@ class Rajalingham2019(BenchmarkBase):
         # control
         candidate.perturb(perturbation=None, target='IT')  # reset
         candidate.start_task(task=BrainModel.Task.probabilities, fitting_stimuli=training_stimuli)
-        control_behavior = candidate.look_at(stimulus_set)
+        control_behavior = candidate.look_at(stimulus_set, number_of_trials=None)
         control_behavior = control_behavior.expand_dims('silenced')
         control_behavior['silenced'] = [False]
 
@@ -73,6 +91,14 @@ class Rajalingham2019(BenchmarkBase):
             behaviors.append(behavior)
         behaviors = merge_data_arrays(behaviors)
 
+        # align naming: from stimulus_set object name to assembly task
+        # unfortunately setting `['object_name'] = ...` directly fails due to MultiIndex, so we'll re-create.
+        behaviors = type(behaviors)(behaviors.values, coords={
+            coord: (dims, values if coord not in ['object_name', 'truth', 'image_label', 'choice']
+            else [TASK_LOOKUP[name] if name in TASK_LOOKUP else name for name in behaviors[coord].values])
+            for coord, dims, values in walk_coords(behaviors)},
+                                    dims=behaviors.dims)
+
         # TODO:
         # Our choice of five objects resulted in ten possible pairwise object discrimination subtasks
         # (see Figure 1A for complete list). To accumulate enough trials to precisely measure performance
@@ -82,7 +108,7 @@ class Rajalingham2019(BenchmarkBase):
 
         # score
         # behaviors = behaviors.unstack('presentation').stack(presentation=['image_id', 'run'])
-        target_assembly = self._target_assembly.sel(split=0)
+        target_assembly = self._target_assembly  # .sel(split=0)
         score = self._similarity_metric(behaviors, target_assembly)
         # score = ceil(score, self.ceiling)
         return score
@@ -117,14 +143,14 @@ class Rajalingham2019(BenchmarkBase):
                                     dim_replace['k']: np.arange(k1['D0'].shape[4]),
                                     dim_replace['nboot']: np.arange(k1['D0'].shape[5]),
                                     dim_replace['exp']: np.arange(k1['D0'].shape[6]),
-                                    'task': np.arange(k1['D0'].shape[7]),
+                                    'task_number': ('task', np.arange(k1['D0'].shape[7])),
+                                    'task_left': ('task', list(tasks_left)),
+                                    'task_right': ('task', list(tasks_right)),
                                 },
                                 dims=['silenced'] + dims)
         assembly = assembly.squeeze('k').squeeze('trial_split')
         assembly = assembly.sel(hemisphere='all')
         assembly = assembly.sel(metric='o2_dp')
-        assembly['task_left'] = 'task', list(tasks_left)
-        assembly['task_right'] = 'task', list(tasks_right)
         assembly = assembly.mean('subject')
 
         # load stimulus_set subsampled from hvm
