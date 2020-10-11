@@ -72,6 +72,7 @@ class Rajalingham2019(BenchmarkBase):
         # (from approximately + 8mm AP to approx + 20mm AP)."
         injection_locations = sample_grid_points([8, 8], [20, 20], num_x=3, num_y=3)
         for site, injection_location in enumerate(injection_locations):
+            candidate.perturb(perturbation=None, target='IT')  # reset
             print(f"Perturbing at {injection_location}")
             candidate.perturb(perturbation=BrainModel.Perturbation.muscimol,
                               target='IT', perturbation_parameters={
@@ -81,7 +82,6 @@ class Rajalingham2019(BenchmarkBase):
                     'amount_microliter': 1,
                     'location': injection_location,
                 })
-            candidate.start_task(task=BrainModel.Task.probabilities, fitting_stimuli=training_stimuli)
             behavior = candidate.look_at(stimulus_set)  # TODO the whole stimulus_set each session?
             behavior = behavior.expand_dims('silenced').expand_dims('site')
             behavior['silenced'] = [True]
