@@ -113,6 +113,6 @@ class BehaviorDifferences(Metric):
     def compute_differences(self, behaviors):
         """
         :param behaviors: an assembly with a dimension `silenced` and values `[True, False]`
-        :return: the difference between these two conditions
+        :return: the difference between these two conditions (silenced - control)
         """
-        return behaviors.sel(silenced=False) - behaviors.sel(silenced=True)
+        return behaviors.sel(silenced=True) - behaviors.sel(silenced=False)
