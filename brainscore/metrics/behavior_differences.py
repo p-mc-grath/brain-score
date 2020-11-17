@@ -6,10 +6,8 @@ from tqdm import tqdm
 
 from brainio_base.assemblies import merge_data_arrays, walk_coords, array_is_element, DataAssembly
 from brainscore.metrics import Metric, Score
-from brainscore.metrics.image_level_behavior import I2n, _o2
-
+from brainscore.metrics.image_level_behavior import _o2
 from brainscore.metrics.transformations import TestOnlyCrossValidationSingle, CrossValidation
-from result_caching import store
 
 
 class BehaviorDifferences(Metric):
@@ -35,7 +33,6 @@ class BehaviorDifferences(Metric):
                            apply=lambda site_assembly: self.apply_site(assembly1_differences, site_assembly))
         return score
 
-    # @store(identifier_ignore=['assembly'])
     def characterize(self, assembly):
         """ compute per-task performance from `presentation x choice` assembly """
         # xarray can't do multi-dimensional grouping, do things manually
