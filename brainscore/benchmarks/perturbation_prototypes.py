@@ -1,3 +1,5 @@
+import logging
+
 import numpy as np
 import scipy.io
 from pathlib import Path
@@ -9,6 +11,7 @@ from brainscore.benchmarks import BenchmarkBase
 from brainscore.metrics import Score
 from brainscore.metrics.behavior_differences import BehaviorDifferences
 from brainscore.model_interface import BrainModel
+from brainscore.utils import fullname
 
 BIBTEX = """@article(...,
 url=https://www.sciencedirect.com/science/article/pii/S0896627319301102
@@ -33,6 +36,7 @@ class Rajalingham2019(BenchmarkBase):
     def __init__(self):
         self._target_assembly = self._load_assembly()
         self._similarity_metric = BehaviorDifferences()
+        self._logger = logging.getLogger(fullname(self))
         super(Rajalingham2019, self).__init__(
             identifier='dicarlo.Rajalingham2019-deficits',
             ceiling_func=None,
@@ -73,7 +77,7 @@ class Rajalingham2019(BenchmarkBase):
         injection_locations = sample_grid_points([8, 8], [20, 20], num_x=3, num_y=3)
         for site, injection_location in enumerate(injection_locations):
             candidate.perturb(perturbation=None, target='IT')  # reset
-            print(f"Perturbing at {injection_location}")
+            self._logger.debug(f"Perturbing at {injection_location}")
             candidate.perturb(perturbation=BrainModel.Perturbation.muscimol,
                               target='IT', perturbation_parameters={
                     # "Each inactivation session began with a single focal microinjection of 1ml of muscimol
@@ -93,11 +97,7 @@ class Rajalingham2019(BenchmarkBase):
 
         # align naming: from stimulus_set object name to assembly task
         # unfortunately setting `['object_name'] = ...` directly fails due to MultiIndex, so we'll re-create.
-        behaviors = type(behaviors)(behaviors.values, coords={
-            coord: (dims, values if coord not in ['object_name', 'truth', 'image_label', 'choice']
-            else [TASK_LOOKUP[name] if name in TASK_LOOKUP else name for name in behaviors[coord].values])
-            for coord, dims, values in walk_coords(behaviors)},
-                                    dims=behaviors.dims)
+        behaviors = self.align_task_names(behaviors)
 
         # TODO:
         # Our choice of five objects resulted in ten possible pairwise object discrimination subtasks
@@ -112,6 +112,14 @@ class Rajalingham2019(BenchmarkBase):
         score = self._similarity_metric(behaviors, target_assembly)
         # score = ceil(score, self.ceiling)
         return score
+
+    def align_task_names(self, behaviors):
+        behaviors = type(behaviors)(behaviors.values, coords={
+            coord: (dims, values if coord not in ['object_name', 'truth', 'image_label', 'choice']
+            else [TASK_LOOKUP[name] if name in TASK_LOOKUP else name for name in behaviors[coord].values])
+            for coord, dims, values in walk_coords(behaviors)},
+                                    dims=behaviors.dims)
+        return behaviors
 
     def _load_assembly(self):
         path = Path(__file__).parent / 'Rajalingham2019_data_summary.mat'
@@ -161,6 +169,7 @@ class Rajalingham2019(BenchmarkBase):
         stimulus_set_ids = [i for i in stimulus_set_ids if len(set(i)) > 1]  # filter empty ids
         stimulus_set = brainscore.get_stimulus_set('dicarlo.hvm')
         stimulus_set = stimulus_set[stimulus_set['image_id'].isin(stimulus_set_ids)]
+        stimulus_set = stimulus_set[stimulus_set['object_name'].isin(TASK_LOOKUP)]
         stimulus_set['image_label'] = stimulus_set['truth'] = stimulus_set['object_name']  # 10 labels at this point
         stimulus_set.identifier = 'dicarlo.hvm_10'
         assembly.attrs['stimulus_set'] = stimulus_set
