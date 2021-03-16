@@ -20,6 +20,9 @@ class BehaviorDifferences(Metric):
         :return: a Score
         """
 
+        # output accuracy
+        self.print_accuracies(assembly1)
+
         # process assembly1
         assembly1_characterized = self.characterize(assembly1)
         assembly1_tasks = self.subselect_tasks(assembly1_characterized, assembly2)
@@ -113,3 +116,20 @@ class BehaviorDifferences(Metric):
         :return: the difference between these two conditions (silenced - control)
         """
         return behaviors.sel(silenced=True) - behaviors.sel(silenced=False)
+
+    def print_accuracies(self, assembly):
+        control = assembly.sel(silenced=False).mean('site')  # can just mean because control is duplicate across sites
+        accuracy_control = self._measure_accuracy(control)
+        silenced = assembly.sel(silenced=True)
+        silenced_accuracies = []
+        for site in silenced['site'].values:
+            site_assembly = silenced.sel(site=site)
+            accuracy = self._measure_accuracy(site_assembly)
+            silenced_accuracies.append(accuracy)
+        print(f"Accuracy control: {accuracy_control})"
+              f"         silenced: {np.mean(silenced_accuracies)}")
+
+    def _measure_accuracy(self, assembly):
+        predictions = assembly['choice'].values[assembly.argmax('choice')]
+        num_correct = (predictions == assembly['truth']).sum()
+        return (num_correct / len(assembly)).values
