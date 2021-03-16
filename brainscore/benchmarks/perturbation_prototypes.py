@@ -92,6 +92,7 @@ class Rajalingham2019(BenchmarkBase):
             behavior['site_iteration'] = 'site', [site]
             behavior['site_x'] = 'site', [injection_location[0]]
             behavior['site_y'] = 'site', [injection_location[1]]
+            behavior = type(behavior)(behavior)  # make sure site and silenced are indexed
             behaviors.append(behavior)
         behaviors = merge_data_arrays(behaviors)
 
