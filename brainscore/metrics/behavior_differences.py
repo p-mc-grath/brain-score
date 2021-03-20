@@ -126,7 +126,7 @@ class BehaviorDifferences(Metric):
             site_assembly = silenced.sel(site=site)
             accuracy = self._measure_accuracy(site_assembly)
             silenced_accuracies.append(accuracy)
-        print(f"Accuracy control: {accuracy_control})"
+        print(f"Accuracy control: {accuracy_control}"
               f"         silenced: {np.mean(silenced_accuracies)}")
 
     def _measure_accuracy(self, assembly):
