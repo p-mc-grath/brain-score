@@ -21,7 +21,7 @@ class BrainModel:
     task to perform
     """
 
-    Perturbation = Enum('Perturbation', " ".join(['muscimol']))
+    Perturbation = Enum('Perturbation', " ".join(['muscimol', 'stimulation']))
     """
     perturbation types
     """
