@@ -27,8 +27,8 @@ requirements = [
     "matplotlib",
     "tensorflow",
     "result_caching @ git+https://github.com/mschrimpf/result_caching",
+    "fire",
     "jupyter",
-    "pandas==0.25.3",
     "pybtex",
     'peewee',
     'psycopg2-binary'
@@ -53,7 +53,6 @@ setup(
         'Intended Audience :: Developers',
         'License :: OSI Approved :: MIT License',
         'Natural Language :: English',
-        'Programming Language :: Python :: 3.6',
         'Programming Language :: Python :: 3.7',
     ],
     test_suite='tests',
