@@ -5,10 +5,10 @@ from brainscore.metrics.transformations import TestOnlyCrossValidation
 
 
 class CrossCorrelation:
-    def __init__(self, stimulus_coord=XarrayDefaults.stimulus_coord, neuroid_coord=XarrayDefaults.neuroid_coord,
+    def __init__(self, stimulus_coord=XarrayDefaults.stimulus_coord, neuroid_coord=XarrayDefaults.group_coord,
                  neuroid_dim=XarrayDefaults.neuroid_dim,
                  test_size=.8, splits=5):
-        self._correlation = XarrayCorrelation(pearsonr, correlation_coord=stimulus_coord, neuroid_coord=neuroid_coord)
+        self._correlation = XarrayCorrelation(pearsonr, correlation_coord=stimulus_coord, group_coord=neuroid_coord)
         self._cross_validation = TestOnlyCrossValidation(test_size=test_size, splits=splits)
         self._neuroid_dim = neuroid_dim
 
@@ -20,9 +20,9 @@ class CrossCorrelation:
 
 
 class Correlation:
-    def __init__(self, stimulus_coord=XarrayDefaults.stimulus_coord, neuroid_coord=XarrayDefaults.neuroid_coord,
+    def __init__(self, stimulus_coord=XarrayDefaults.stimulus_coord, neuroid_coord=XarrayDefaults.group_coord,
                  neuroid_dim=XarrayDefaults.neuroid_dim):
-        self._correlation = XarrayCorrelation(pearsonr, correlation_coord=stimulus_coord, neuroid_coord=neuroid_coord)
+        self._correlation = XarrayCorrelation(pearsonr, correlation_coord=stimulus_coord, group_coord=neuroid_coord)
         self._neuroid_dim = neuroid_dim
 
     def __call__(self, source, target):

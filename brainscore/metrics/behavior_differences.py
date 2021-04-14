@@ -7,6 +7,7 @@ from brainio_base.assemblies import merge_data_arrays, walk_coords, array_is_ele
 from brainscore.metrics import Metric, Score
 from brainscore.metrics.image_level_behavior import _o2
 from brainscore.metrics.transformations import TestOnlyCrossValidationSingle, CrossValidation
+from brainscore.metrics.xarray_utils import XarrayCorrelation
 
 
 class BehaviorDifferences(Metric):
@@ -18,12 +19,14 @@ class BehaviorDifferences(Metric):
         :param assembly2: a processed assembly in the format of `silenced :2, task: c * (c-1), site: m`
         :return: a Score
         """
+        self._correlation = XarrayCorrelation(correlation=pearsonr, correlation_coord='task', group_coord=None)
 
         # process assembly1
         assembly1_characterized = self.characterize(assembly1)
         assembly1_tasks = self.subselect_tasks(assembly1_characterized, assembly2)
         assembly1_differences = self.compute_differences(assembly1_tasks)
         assembly2_differences = self.compute_differences(assembly2)
+        assembly2_differences = assembly2_differences.mean('bootstrap')
 
         # compare
         site_split = TestOnlyCrossValidationSingle(  # instantiate on-the-fly to control the kfolds for 1 test site each
@@ -88,12 +91,14 @@ class BehaviorDifferences(Metric):
         :param target_test: target assembly for testing with 1 task
         :return: a pair
         """
+        # deal with xarray bug
+        source_train, source_test = deal_with_xarray_bug(source_train), deal_with_xarray_bug(source_test)
         # map: find site in assembly1 that best matches mapping tasks
         correlations = {}
         for site in source_train['site'].values:
             source_site = source_train.sel(site=site)
             np.testing.assert_array_equal(source_site['task'].values, target_train['task'].values)
-            correlation = pearsonr(source_site.values, target_train.values)
+            correlation = self._correlation(source_site, target_train)
             correlations[site] = correlation
         best_site = [site for site, correlation in correlations.items() if correlation == max(correlations.values())]
         best_site = best_site[0]  # choose first one if there are multiple
@@ -112,3 +117,10 @@ class BehaviorDifferences(Metric):
         :return: the difference between these two conditions (silenced - control)
         """
         return behaviors.sel(silenced=True) - behaviors.sel(silenced=False)
+
+
+def deal_with_xarray_bug(assembly):
+    if hasattr(assembly, 'site_level_0'):
+        return type(assembly)(assembly.values, coords={
+            coord: (dim, values) for coord, dim, values in walk_coords(assembly) if coord != 'site_level_0'},
+                              dims=assembly.dims)

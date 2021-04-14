@@ -8,7 +8,7 @@ class Defaults:
     expected_dims = ('presentation', 'neuroid')
     stimulus_coord = 'image_id'
     neuroid_dim = 'neuroid'
-    neuroid_coord = 'neuroid_id'
+    group_coord = 'neuroid_id'
 
 
 class XarrayRegression:
@@ -17,7 +17,7 @@ class XarrayRegression:
     """
 
     def __init__(self, regression, expected_dims=Defaults.expected_dims, neuroid_dim=Defaults.neuroid_dim,
-                 neuroid_coord=Defaults.neuroid_coord, stimulus_coord=Defaults.stimulus_coord):
+                 neuroid_coord=Defaults.group_coord, stimulus_coord=Defaults.stimulus_coord):
         self._regression = regression
         self._expected_dims = expected_dims
         self._neuroid_dim = neuroid_dim
@@ -70,29 +70,35 @@ class XarrayRegression:
 
 
 class XarrayCorrelation:
-    def __init__(self, correlation, correlation_coord=Defaults.stimulus_coord, neuroid_coord=Defaults.neuroid_coord):
+    def __init__(self, correlation, correlation_coord=Defaults.stimulus_coord, group_coord=Defaults.group_coord):
         self._correlation = correlation
         self._correlation_coord = correlation_coord
-        self._neuroid_coord = neuroid_coord
+        self._group_coord = group_coord
 
     def __call__(self, prediction, target):
         # align
-        prediction = prediction.sortby([self._correlation_coord, self._neuroid_coord])
-        target = target.sortby([self._correlation_coord, self._neuroid_coord])
+        sorting_coords = self._correlation_coord if not self._group_coord \
+            else [self._correlation_coord, self._group_coord]
+        prediction = prediction.sortby(sorting_coords)
+        target = target.sortby(sorting_coords)
         assert np.array(prediction[self._correlation_coord].values == target[self._correlation_coord].values).all()
-        assert np.array(prediction[self._neuroid_coord].values == target[self._neuroid_coord].values).all()
-        # compute correlation per neuroid
-        neuroid_dims = target[self._neuroid_coord].dims
-        assert len(neuroid_dims) == 1
-        correlations = []
-        for i, coord_value in enumerate(target[self._neuroid_coord].values):
-            target_neuroids = target.isel(**{neuroid_dims[0]: i})  # `isel` is about 10x faster than `sel`
-            prediction_neuroids = prediction.isel(**{neuroid_dims[0]: i})
-            r, p = self._correlation(target_neuroids, prediction_neuroids)
-            correlations.append(r)
-        # package
-        result = Score(correlations,
-                       coords={coord: (dims, values)
-                               for coord, dims, values in walk_coords(target) if dims == neuroid_dims},
-                       dims=neuroid_dims)
+        if self._group_coord:
+            assert np.array(prediction[self._group_coord].values == target[self._group_coord].values).all()
+            # compute correlation per neuroid
+            group_dims = target[self._group_coord].dims
+            assert len(group_dims) == 1
+            correlations = []
+            for i, coord_value in enumerate(target[self._group_coord].values):
+                target_group = target.isel(**{group_dims[0]: i})  # `isel` is about 10x faster than `sel`
+                prediction_group = prediction.isel(**{group_dims[0]: i})
+                r, p = self._correlation(prediction_group, target_group)
+                correlations.append(r)
+            # package
+            result = Score(correlations,
+                           coords={coord: (dims, values)
+                                   for coord, dims, values in walk_coords(target) if dims == group_dims},
+                           dims=group_dims)
+        else:  # nothing to group over
+            r, p = self._correlation(prediction, target)
+            result = Score(r)
         return result
