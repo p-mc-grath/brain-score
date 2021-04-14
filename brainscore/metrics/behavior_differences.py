@@ -1,4 +1,6 @@
 import itertools
+import logging
+
 import numpy as np
 from scipy.stats import pearsonr
 from tqdm import tqdm
@@ -7,10 +9,14 @@ from brainio_base.assemblies import merge_data_arrays, walk_coords, array_is_ele
 from brainscore.metrics import Metric, Score
 from brainscore.metrics.image_level_behavior import _o2
 from brainscore.metrics.transformations import TestOnlyCrossValidationSingle, CrossValidation
-from brainscore.metrics.xarray_utils import XarrayCorrelation
+from brainscore.utils import fullname
 
 
 class BehaviorDifferences(Metric):
+    def __init__(self):
+        super(BehaviorDifferences, self).__init__()
+        self._logger = logging.getLogger(fullname(self))
+
     def __call__(self, assembly1, assembly2):
         """
         :param assembly1: a tuple with the first element representing the control behavior in the format of
@@ -19,9 +25,7 @@ class BehaviorDifferences(Metric):
         :param assembly2: a processed assembly in the format of `silenced :2, task: c * (c-1), site: m`
         :return: a Score
         """
-        self._correlation = XarrayCorrelation(correlation=pearsonr, correlation_coord='task', group_coord=None)
-
-        # process assembly1
+        # process assembly1 TODO: move characterization to benchmark
         assembly1_characterized = self.characterize(assembly1)
         assembly1_tasks = self.subselect_tasks(assembly1_characterized, assembly2)
         assembly1_differences = self.compute_differences(assembly1_tasks)
@@ -39,7 +43,8 @@ class BehaviorDifferences(Metric):
         """ compute per-task performance from `presentation x choice` assembly """
         # xarray can't do multi-dimensional grouping, do things manually
         o2s = []
-        adjacent_values = assembly['silenced'].values, assembly['site'].values  # TODO: this takes 2min (4.5 in debug)
+        adjacent_values = assembly['silenced'].values, assembly['site'].values
+        # TODO: this takes 2min (4.5 in debug)
         for silenced, site in tqdm(itertools.product(*adjacent_values), desc='characterize',
                                    total=np.prod([len(values) for values in adjacent_values])):
             current_assembly = assembly.sel(silenced=silenced, site=site)
@@ -74,6 +79,16 @@ class BehaviorDifferences(Metric):
                                       site_target_assembly.sortby('task_number')['task_left'].values)
         np.testing.assert_array_equal(source_assembly.sortby('task_number')['task_right'].values,
                                       site_target_assembly.sortby('task_number')['task_right'].values)
+
+        # filter non-nan task measurements from target
+        nonnan_tasks = site_target_assembly['task'][~site_target_assembly.isnull()]
+        if len(nonnan_tasks) < len(site_target_assembly):
+            self._logger.warning(
+                f"Ignoring tasks {site_target_assembly['task'][~site_target_assembly.isnull()].values}")
+        site_target_assembly = site_target_assembly.sel(task=nonnan_tasks)
+        source_assembly = source_assembly.sel(task=nonnan_tasks.values)
+
+        # try to predict from model
         task_split = CrossValidation(split_coord='task_number', stratification_coord=None,
                                      kfold=True, splits=len(site_target_assembly['task']))
         task_scores = task_split(source_assembly, site_target_assembly, apply=self.apply_task)
@@ -98,11 +113,12 @@ class BehaviorDifferences(Metric):
         for site in source_train['site'].values:
             source_site = source_train.sel(site=site)
             np.testing.assert_array_equal(source_site['task'].values, target_train['task'].values)
-            correlation = self._correlation(source_site, target_train)
+            correlation, p = pearsonr(source_site, target_train)
             correlations[site] = correlation
         best_site = [site for site, correlation in correlations.items() if correlation == max(correlations.values())]
         best_site = best_site[0]  # choose first one if there are multiple
-        # test: predictivity of held-out task
+        # test: predictivity of held-out task.
+        # We can only collect the single prediction here and then correlate in outside loop
         source_test = source_test.sel(site=best_site)
         np.testing.assert_array_equal(source_test['task'].values, target_test['task'].values)
         pair = type(target_test)([source_test.values[0], target_test.values[0]],
