@@ -67,8 +67,8 @@ class Rajalingham2019(BenchmarkBase):
         candidate.perturb(perturbation=None, target='IT')  # reset
         candidate.start_task(task=BrainModel.Task.probabilities, fitting_stimuli=training_stimuli)
         control_behavior = candidate.look_at(stimulus_set, number_of_trials=None)
-        control_behavior = control_behavior.expand_dims('silenced')
-        control_behavior['silenced'] = [False]
+        control_behavior = control_behavior.expand_dims('injected')
+        control_behavior['injected'] = [False]
 
         # silencing sessions
         behaviors = [control_behavior]
@@ -87,12 +87,12 @@ class Rajalingham2019(BenchmarkBase):
                     'location': injection_location,
                 })
             behavior = candidate.look_at(stimulus_set)  # TODO the whole stimulus_set each session?
-            behavior = behavior.expand_dims('silenced').expand_dims('site')
-            behavior['silenced'] = [True]
+            behavior = behavior.expand_dims('injected').expand_dims('site')
+            behavior['injected'] = [True]
             behavior['site_iteration'] = 'site', [site]
             behavior['site_x'] = 'site', [injection_location[0]]
             behavior['site_y'] = 'site', [injection_location[1]]
-            behavior = type(behavior)(behavior)  # make sure site and silenced are indexed
+            behavior = type(behavior)(behavior)  # make sure site and injected are indexed
             behaviors.append(behavior)
         behaviors = merge_data_arrays(behaviors)
 
@@ -109,8 +109,7 @@ class Rajalingham2019(BenchmarkBase):
 
         # score
         # behaviors = behaviors.unstack('presentation').stack(presentation=['image_id', 'run'])
-        target_assembly = self._target_assembly  # .sel(split=0)
-        score = self._similarity_metric(behaviors, target_assembly)
+        score = self._similarity_metric(behaviors, self._target_assembly)
         # score = ceil(score, self.ceiling)
         return score
 
@@ -122,7 +121,11 @@ class Rajalingham2019(BenchmarkBase):
                                     dims=behaviors.dims)
         return behaviors
 
-    def _load_assembly(self):
+    def _load_assembly(self, contra_hemisphere=True):
+        """
+        :param contra_hemisphere: whether to only select data and associated stimuli
+            where the target object was contralateral to the injection hemisphere
+        """
         path = Path(__file__).parent / 'Rajalingham2019_data_summary.mat'
         data = scipy.io.loadmat(path)['data_summary']
         struct = {d[0]: v for d, v in zip(data.dtype.descr, data[0, 0])}
@@ -136,14 +139,15 @@ class Rajalingham2019(BenchmarkBase):
 
         dim_replace = missing_dict({'sub_metric': 'hemisphere', 'nboot': 'bootstrap', 'exp': 'site',
                                     'niter': 'trial_split', 'subj': 'subject'})
+        condition_replace = {'ctrl': 'saline', 'inj': 'muscimol'}
         dims = [dim_replace[v[0]] for v in k1['dim_labels'][0]]
         subjects = [v[0] for v in k1['subjs'][0]]
         conditions, subjects = zip(*[subject.split('_') for subject in subjects])
         metrics = [v[0] for v in k1['metrics'][0]]
         assembly = DataAssembly([k1['D0'], k1['D1']],
                                 coords={
-                                    'silenced': [True, False],
-                                    'condition': (dim_replace['subj'], list(conditions)),
+                                    'injected': [True, False],
+                                    'injection': (dim_replace['subj'], [condition_replace[c] for c in conditions]),
                                     'subject_id': (dim_replace['subj'], list(subjects)),
                                     'metric': metrics,
                                     dim_replace['sub_metric']: ['all', 'ipsi', 'contra'],
@@ -158,21 +162,26 @@ class Rajalingham2019(BenchmarkBase):
                                     'task_left': ('task', list(tasks_left)),
                                     'task_right': ('task', list(tasks_right)),
                                 },
-                                dims=['silenced'] + dims)
+                                dims=['injected'] + dims)
+        assembly['monkey'] = 'site', ['M' if site <= 9 else 'P' for site in assembly['site_number'].values]
         assembly = assembly.squeeze('k').squeeze('trial_split')
-        assembly = assembly.sel(hemisphere='all')
+        if contra_hemisphere:
+            assembly = assembly.sel(hemisphere='contra')
         assembly = assembly.sel(metric='o2_dp')
-        assembly = assembly.mean('subject')
+        assembly = assembly[{'subject': [injection == 'muscimol' for injection in assembly['injection'].values]}]
+        assembly = assembly.squeeze('subject')  # squeeze single-element subject dimension since data are pooled already
 
         # load stimulus_set subsampled from hvm
-        stimulus_set_ids = scipy.io.loadmat('/braintree/home/msch/rr_share_topo/topoDCNN/dat/metaparams.mat')
-        stimulus_set_ids = stimulus_set_ids['id']
+        stimulus_set_meta = scipy.io.loadmat('/braintree/home/msch/rr_share_topo/topoDCNN/dat/metaparams.mat')
+        stimulus_set_ids = stimulus_set_meta['id']
         stimulus_set_ids = [i for i in stimulus_set_ids if len(set(i)) > 1]  # filter empty ids
         stimulus_set = brainscore.get_stimulus_set('dicarlo.hvm')
         stimulus_set = stimulus_set[stimulus_set['image_id'].isin(stimulus_set_ids)]
         stimulus_set = stimulus_set[stimulus_set['object_name'].isin(TASK_LOOKUP)]
         stimulus_set['image_label'] = stimulus_set['truth'] = stimulus_set['object_name']  # 10 labels at this point
         stimulus_set.identifier = 'dicarlo.hvm_10'
+        if contra_hemisphere:
+            stimulus_set = stimulus_set[(stimulus_set['rxz'] > 0) & (stimulus_set['variation'] == 6)]
         assembly.attrs['stimulus_set'] = stimulus_set
         assembly.attrs['stimulus_set_identifier'] = stimulus_set.identifier
         return assembly

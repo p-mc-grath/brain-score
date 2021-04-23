@@ -22,7 +22,7 @@ class BehaviorDifferences(Metric):
         :param assembly1: a tuple with the first element representing the control behavior in the format of
             `presentation: p, choice: c` and the second element representing inactivations behaviors in
             `presentation: p, choice: c, site: n`
-        :param assembly2: a processed assembly in the format of `silenced :2, task: c * (c-1), site: m`
+        :param assembly2: a processed assembly in the format of `injected :2, task: c * (c-1), site: m`
         :return: a Score
         """
         # process assembly1 TODO: move characterization to benchmark
@@ -43,14 +43,14 @@ class BehaviorDifferences(Metric):
         """ compute per-task performance from `presentation x choice` assembly """
         # xarray can't do multi-dimensional grouping, do things manually
         o2s = []
-        adjacent_values = assembly['silenced'].values, assembly['site'].values
+        adjacent_values = assembly['injected'].values, assembly['site'].values
         # TODO: this takes 2min (4.5 in debug)
-        for silenced, site in tqdm(itertools.product(*adjacent_values), desc='characterize',
+        for injected, site in tqdm(itertools.product(*adjacent_values), desc='characterize',
                                    total=np.prod([len(values) for values in adjacent_values])):
-            current_assembly = assembly.sel(silenced=silenced, site=site)
+            current_assembly = assembly.sel(injected=injected, site=site)
             o2 = _o2(current_assembly)
-            o2 = o2.expand_dims('silenced').expand_dims('site')
-            o2['silenced'] = [silenced]
+            o2 = o2.expand_dims('injected').expand_dims('site')
+            o2['injected'] = [injected]
             for (coord, _, _), value in zip(walk_coords(assembly['site']), site):
                 o2[coord] = 'site', [value]
             o2 = DataAssembly(o2)  # ensure multi-index on site
@@ -95,6 +95,8 @@ class BehaviorDifferences(Metric):
         task_scores = task_scores.raw
         correlation, p = pearsonr(task_scores.sel(type='source'), task_scores.sel(type='target'))
         score = Score([correlation, p], coords={'statistic': ['r', 'p']}, dims=['statistic'])
+        score.attrs['predictions'] = task_scores.sel(type='source')
+        score.attrs['target'] = task_scores.sel(type='target')
         return score
 
     def apply_task(self, source_train, target_train, source_test, target_test):
@@ -129,10 +131,10 @@ class BehaviorDifferences(Metric):
 
     def compute_differences(self, behaviors):
         """
-        :param behaviors: an assembly with a dimension `silenced` and values `[True, False]`
-        :return: the difference between these two conditions (silenced - control)
+        :param behaviors: an assembly with a dimension `injected` and values `[True, False]`
+        :return: the difference between these two conditions (injected - control)
         """
-        return behaviors.sel(silenced=True) - behaviors.sel(silenced=False)
+        return behaviors.sel(injected=True) - behaviors.sel(injected=False)
 
 
 def deal_with_xarray_bug(assembly):

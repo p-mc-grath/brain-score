@@ -8,8 +8,8 @@ class TestRajalingham2019:
         benchmark = Rajalingham2019()
         assembly = benchmark._target_assembly
         assert assembly is not None
-        assert len(assembly['silenced']) == 2
-        assert set(assembly['silenced'].values) == {True, False}
+        assert len(assembly['injected']) == 2
+        assert set(assembly['injected'].values) == {True, False}
         assert len(assembly['split']) == 2
         assert len(assembly['bootstrap']) == 10
         assert len(assembly['task']) == 6
