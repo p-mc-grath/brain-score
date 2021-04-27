@@ -74,7 +74,9 @@ class Rajalingham2019(BenchmarkBase):
         behaviors = [control_behavior]
         # "We varied the location of microinjections to randomly sample the ventral surface of IT
         # (from approximately + 8mm AP to approx + 20mm AP)."
-        injection_locations = sample_grid_points([8, 8], [20, 20], num_x=3, num_y=3)
+        # stay between [0, 10] since that is the extent of the tissue
+        injection_locations = sample_grid_points([2, 2], [8, 8], num_x=3, num_y=3)
+        # injection_locations = sample_grid_points([2, 2], [8, 8], num_x=10, num_y=10)
         for site, injection_location in enumerate(injection_locations):
             candidate.perturb(perturbation=None, target='IT')  # reset
             self._logger.debug(f"Perturbing at {injection_location}")
