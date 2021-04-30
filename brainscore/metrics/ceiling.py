@@ -65,7 +65,7 @@ class _SplitHalvesConsistency(Ceiling):
 class InternalConsistency(Ceiling):
     def __init__(self,
                  split_coord=_SplitHalvesConsistency.Defaults.split_coord, stimulus_coord=XarrayDefaults.stimulus_coord,
-                 neuroid_dim=XarrayDefaults.neuroid_dim, neuroid_coord=XarrayDefaults.neuroid_coord):
+                 neuroid_dim=XarrayDefaults.neuroid_dim, neuroid_coord=XarrayDefaults.group_coord):
         consistency = SplitHalfConsistency(stimulus_coord=stimulus_coord, neuroid_dim=neuroid_dim,
                                            neuroid_coord=neuroid_coord)
         self._consistency = _SplitHalvesConsistency(consistency=consistency, split_coord=split_coord,
@@ -81,10 +81,10 @@ class SplitHalfConsistency:
     """
 
     def __init__(self, stimulus_coord=XarrayDefaults.stimulus_coord,
-                 neuroid_dim=XarrayDefaults.neuroid_dim, neuroid_coord=XarrayDefaults.neuroid_coord):
+                 neuroid_dim=XarrayDefaults.neuroid_dim, neuroid_coord=XarrayDefaults.group_coord):
         correlation = scipy.stats.pearsonr
         self._correlation = XarrayCorrelation(correlation, correlation_coord=stimulus_coord,
-                                              neuroid_coord=neuroid_coord)
+                                              group_coord=neuroid_coord)
         self._neuroid_dim = neuroid_dim
 
     def __call__(self, half1, half2):
