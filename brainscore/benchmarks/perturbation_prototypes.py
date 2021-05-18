@@ -35,6 +35,11 @@ TASK_LOOKUP = {
 class Rajalingham2019(BenchmarkBase):
     def __init__(self):
         self._target_assembly = self._load_assembly()
+        self._training_stimuli = brainscore.get_stimulus_set('dicarlo.hvm')
+        self._training_stimuli['image_label'] = self._training_stimuli['object_name']
+        # use only those images where it's the same object (label)
+        self._training_stimuli = self._training_stimuli[self._training_stimuli['object_name'].isin(
+            self._target_assembly.stimulus_set['object_name'])]
         self._similarity_metric = BehaviorDifferences()
         self._logger = logging.getLogger(fullname(self))
         super(Rajalingham2019, self).__init__(
@@ -53,7 +58,7 @@ class Rajalingham2019(BenchmarkBase):
         # Training
         # TODO: Both animals were previously trained on other images of other objects, and were proficient in
         #  discriminating among over 35 arbitrarily sampled basic-level object categories
-        training_stimuli = stimulus_set  # TODO: what were monkeys trained on? all of hvm?
+        training_stimuli = self._training_stimuli
         # stimulus_set = repeat_trials(number_of_trials=10) TODO
 
         # "[...] inactivation sessions were interleaved over days with control behavioral sessions.
