@@ -58,7 +58,7 @@ class Rajalingham2019(BenchmarkBase):
         # Training
         # TODO: Both animals were previously trained on other images of other objects, and were proficient in
         #  discriminating among over 35 arbitrarily sampled basic-level object categories
-        training_stimuli = self._training_stimuli
+        training_stimuli = stimulus_set # self._training_stimuli
         # stimulus_set = repeat_trials(number_of_trials=10) TODO
 
         # "[...] inactivation sessions were interleaved over days with control behavioral sessions.
