@@ -58,7 +58,7 @@ class Rajalingham2019(BenchmarkBase):
         # Training
         # TODO: Both animals were previously trained on other images of other objects, and were proficient in
         #  discriminating among over 35 arbitrarily sampled basic-level object categories
-        training_stimuli = stimulus_set # self._training_stimuli
+        training_stimuli = stimulus_set  # self._training_stimuli
         # stimulus_set = repeat_trials(number_of_trials=10) TODO
 
         # "[...] inactivation sessions were interleaved over days with control behavioral sessions.
@@ -177,6 +177,14 @@ class Rajalingham2019(BenchmarkBase):
         assembly = assembly.sel(metric='o2_dp')
         assembly = assembly[{'subject': [injection == 'muscimol' for injection in assembly['injection'].values]}]
         assembly = assembly.squeeze('subject')  # squeeze single-element subject dimension since data are pooled already
+
+        # add site locations
+        path = Path(__file__).parent / 'xray_3d.mat'
+        site_locations = scipy.io.loadmat(path)['MX']
+        assembly['site_x'] = 'site', site_locations[:, 0]
+        assembly['site_y'] = 'site', site_locations[:, 1]
+        assembly['site_z'] = 'site', site_locations[:, 2]
+        assembly = DataAssembly(assembly)  # reindex
 
         # load stimulus_set subsampled from hvm
         stimulus_set_meta = scipy.io.loadmat('/braintree/home/msch/rr_share_topo/topoDCNN/dat/metaparams.mat')
