@@ -59,27 +59,6 @@ TASK_LOOKUP = {
 }
 
 
-# github
-# TODO, refork and start fresh
-
-# target_statistic
-# TODO narrow down pairs to the 62 site pairs used in the paper, currently ~90
-# TODO neuroid reliability incorporation
-
-# Code
-# TODO separate benchmark and metric -> think
-# TODO multiple models
-# TODO plot monkeys separately
-# TODO screen grap rishis curve
-# TODO mean variance scoring
-
-# paper
-# TODO traininig_stimuli == whole stimulus_set??
-
-# plotting
-# TODO real log binning: sem = std/ sqrt(#observations)
-# TODO plot location of data show vs. paper locations jim
-
 class DicarloRajalingham2019SpatialDeficits(BenchmarkBase):
 
     def __init__(self):
@@ -103,7 +82,7 @@ class DicarloRajalingham2019SpatialDeficits(BenchmarkBase):
         candidate_assembly = self.create_dprime_assembly(candidate)
         candidate_statistic = self.compute_response_deficit_distance_candidate(candidate_assembly)
 
-        score = self._score(np.hstack(self._target_statistic), candidate_statistic)
+        score = self._score(self._target_statistic, candidate_statistic)
         score.attrs['target_statistic'] = self._target_statistic
         score.attrs['candidate_statistic'] = candidate_statistic
 
@@ -186,12 +165,11 @@ class DicarloRajalingham2019SpatialDeficits(BenchmarkBase):
     def _compute_response_deficit_distance(self, dprime_assembly, mask):
         distances = self.pairwise_distances(dprime_assembly)
 
-        behavioral_differences = self.compute_differences(
-            dprime_assembly)  # TODO task vs site dimensions switched for model??
-        # deal with nan values while correlating; not np.ma.corrcoef: https://github.com/numpy/numpy/issues/15601
+        behavioral_differences = self.compute_differences(dprime_assembly)
+        # dealing with nan values while correlating; not np.ma.corrcoef: https://github.com/numpy/numpy/issues/15601
         correlations = DataFrame(behavioral_differences.data).T.corr().values
 
-        statistic = [distances[mask], correlations[mask]]
+        statistic = np.array([distances[mask], correlations[mask]])
 
         return statistic
 
@@ -412,129 +390,3 @@ def deal_with_xarray_bug(assembly):
         return type(assembly)(assembly.values, coords={
             coord: (dim, values) for coord, dim, values in walk_coords(assembly) if coord != 'site_level_0'},
                               dims=assembly.dims)
-
-
-def running_mean_std(data):
-    '''
-    !!! this does not take into account 0 distance values -> distorting representation
-
-    :return: middle of bin, running mean values, running std values
-    '''
-    x, y = data[0], data[1]
-
-    rm_x = []
-    rm_y = []
-    std_y = []
-    for mm in np.arange(-1, np.max(x), 1):
-        rm_x.append(mm + 1)
-        tmp_y = y[np.logical_and.reduce([mm <= x, x < mm + 1, y != 0])]
-
-        add_range_stability = 0
-        while tmp_y.size < 1:
-            add_range_stability += 1
-            tmp_y = y[np.logical_and.reduce([mm - add_range_stability <= x,
-                                             x < mm + 1 + add_range_stability,
-                                             y != 0])]
-
-        rm_y.append(np.mean(tmp_y))
-        std_y.append(np.std(tmp_y))
-
-    return np.array(rm_x), np.array(rm_y), np.array(std_y)
-
-
-def plot_running_mean_std(ax, data, color='b', label='Running Mean & Std'):
-    rm_x, rm_y, std_y = running_mean_std(data)
-    ax.plot(rm_x, rm_y, color=color, label=label)
-    if color == 'b':
-        color == 'gray'
-    ax.fill_between(rm_x, rm_y - std_y, rm_y + std_y, color=color, alpha=0.2)
-    return ax
-
-
-def plot_rishi_binning(ax, statistic, color='blue', label='target'):
-    # ~ = np.geomspace(np.min(score.target_statistic[0][score.target_statistic[0] > 0]),
-    #                  np.max(score.target_statistic[0]), 7)
-    rishi_paper = [.85, 1.25, 2.3, 3.75, 5.5, 7.5, 11]  # approx what rishi did in the paper
-
-    bins = zip([0, .85, 1.25, 2.3, 3.75, 5.5, 7.5], [.85, 1.25, 2.3, 3.75, 5.5, 7.5, 11])
-    bin_stat = np.zeros((2, len(rishi_paper)))
-    for i, (bmin, bmax) in enumerate(bins):
-        bin_stat[0, i] = np.mean(statistic[1][np.logical_and(statistic[0] >= bmin, statistic[0] < bmax)])
-        bin_stat[1, i] = np.std(statistic[1][np.logical_and(statistic[0] >= bmin, statistic[0] < bmax)]) / np.sum(
-            np.logical_and(statistic[0] >= bmin, statistic[0] < bmax))  # SEM
-    plt.errorbar(rishi_paper, bin_stat[0], bin_stat[1], color=color, fmt='o', markersize=8, label=label)
-
-    return ax
-
-
-def plot_exp_decay_model(ax, statistic, color='red', label='exp decay model'):
-    import scipy.optimize
-
-    def exp_decay(x, tau, init):
-        return init * np.e ** (-x / tau)
-
-    popt, pcov = scipy.optimize.curve_fit(exp_decay, *statistic)
-    x_sorted = np.sort(statistic[0])
-    y_fit = exp_decay(x_sorted, *popt)
-
-    # https://stackoverflow.com/questions/58400991/too-large-variances-from-the-covariance-matrix-when-fitting-data-using-curve-fit
-    perr = np.sqrt(np.diag(pcov))
-    err_band = exp_decay(x_sorted, *popt + perr) - exp_decay(x_sorted, *popt)
-
-    plt.plot(x_sorted, y_fit, color=color, label=label)
-    ax.fill_between(x_sorted, y_fit - err_band, y_fit + err_band, color=color, alpha=0.2)
-
-    return ax
-
-
-def plot_settings(ax):
-    plt.plot([0, 12], [0, 0], color='black', linestyle='dashed')
-    ax.set_box_aspect(1)
-    ax.set_ylim(-.2, 1.2)
-    ax.set_xlim(0, 12)
-    ax.set_yticks([0, 0.5, 1])
-    ax.set_xticks([0, 5, 10])
-    ax.set_ylabel('Pair-wise Deficit Correlation (r)')
-    ax.set_xlabel('Pair-wise Cortical Distance (mm)')
-    plt.legend()
-
-
-if __name__ == "__main__":
-    from direct_causality.model import create_model
-
-    mka = {'basemodel': 'alexnet', 'type': 'tdann',
-           'tdann__scl_lambda': 0.9,
-           'region_IT': 'fc6', 'behavioral_readout_layer': 'fc6'}
-    model = create_model(mka)
-
-    benchmark = DicarloRajalingham2019SpatialDeficits()
-    score = benchmark(model)
-
-    import matplotlib.pyplot as plt
-
-    fig, ax = plt.subplots()
-    for (statistic_name, color) in zip(['target_statistic', 'candidate_statistic'], ['blue', 'orange']):
-        statistic = score.attrs[statistic_name]
-        ax.scatter(*statistic, label=statistic_name, color=color)
-        ax = plot_running_mean_std(ax, statistic, label=statistic_name, color=color)
-    plot_settings(ax)
-    plt.show()
-
-    statistic = score.target_statistic
-    fig, ax = plt.subplots()
-    ax = plot_rishi_binning(ax, statistic)
-    ax = plot_exp_decay_model(ax, statistic)
-    plot_settings(ax)
-    plt.show()
-
-    pass
-
-fig, ax = plt.subplots()
-statistic = score.target_statistic
-ax = plot_rishi_binning(ax, statistic)
-ax = plot_exp_decay_model(ax, statistic)
-statistic = score.candidate_statistic
-ax = plot_rishi_binning(ax, statistic, color='green', label='candidate')
-ax = plot_exp_decay_model(ax, statistic, color='yellow', label='candidate')
-plot_settings(ax)
-plt.show()
