@@ -8,8 +8,8 @@ def _aggregate(scores):
     :param scores: list of values assumed to be scores
     :return: Score object | where score['center'] = mean(scores) and score['error'] = std(scores)
     '''
-    center = np.mean(scores)
-    error = np.std(scores)
+    center = np.median(scores)
+    error = np.median(np.absolute(scores - np.median(scores)))  # MAD
     aggregate_score = Score([center, error], coords={'aggregation': ['center', 'error']}, dims=('aggregation',))
     aggregate_score.attrs[Score.RAW_VALUES_KEY] = scores
 

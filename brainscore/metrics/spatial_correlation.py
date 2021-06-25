@@ -8,8 +8,8 @@ def _aggregate(scores):
     :param scores: list of values assumed to be scores
     :return: Score object | where score['center'] = mean(scores) and score['error'] = std(scores)
     '''
-    center = np.mean(scores)
-    error = np.std(scores)
+    center = np.median(scores)
+    error = np.median(np.absolute(scores - np.median(scores)))  # MAD
     aggregate_score = Score([center, error], coords={'aggregation': ['center', 'error']}, dims=('aggregation',))
     aggregate_score.attrs[Score.RAW_VALUES_KEY] = scores
 
@@ -46,7 +46,7 @@ class SpatialCorrelationSimilarity(Metric):
             if enough_data:
                 bin_scores.append(self.similarity_function(self.target_statistic[1, in_bin_t],
                                                            self.candidate_statistic[1, in_bin_c]))
-    
+
         return _aggregate(bin_scores)
 
     def _bin_masks(self):
@@ -60,6 +60,6 @@ class SpatialCorrelationSimilarity(Metric):
                                         self.target_statistic[0] < lower_bound_mm + self.bin_size))[0]
             c = np.where(np.logical_and(self.candidate_statistic[0] >= lower_bound_mm,
                                         self.candidate_statistic[0] < lower_bound_mm + self.bin_size))[0]
-            enough_data = t.size > 30 and c.size > 30  # random threshold
+            enough_data = t.size > 0 and c.size > 0  # random threshold
 
             yield t, c, enough_data
