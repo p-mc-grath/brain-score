@@ -9,6 +9,7 @@ from PIL import Image
 from numpy.random.mtrand import RandomState
 from tqdm import tqdm
 
+from brainio_base.assemblies import DataAssembly
 from brainio_base.stimuli import StimulusSet
 
 logger = logging.getLogger(__name__)
@@ -234,7 +235,10 @@ def copy_paths(paths, target_directory, skip_if_exist=True):
 def collect_assembly():
     # data extracted with https://apps.automeris.io/wpd/ on 2021-07-05, 300 color distance + manual fixes
     data = pd.read_csv(Path(__file__).parent / '100-150ms.csv')
-    data = data.to_xarray()
+    data = DataAssembly(data['psychometric_shift'], coords={
+        'experiment_number': ('experiment', np.arange(len(data))),
+        'face_selectivity': ('experiment', data['face_selectivity'])
+    }, dims=['experiment'])
     return data
 
 
