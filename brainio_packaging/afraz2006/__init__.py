@@ -4,6 +4,7 @@ import shutil
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 from PIL import Image
 from numpy.random.mtrand import RandomState
 from tqdm import tqdm
@@ -228,6 +229,13 @@ def copy_paths(paths, target_directory, skip_if_exist=True):
         shutil.copy(path, target_path)
         copied_paths.append(target_path)
     return copied_paths
+
+
+def collect_assembly():
+    # data extracted with https://apps.automeris.io/wpd/ on 2021-07-05, 300 color distance + manual fixes
+    data = pd.read_csv(Path(__file__).parent / '100-150ms.csv')
+    data = data.to_xarray()
+    return data
 
 
 if __name__ == '__main__':
