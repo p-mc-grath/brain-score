@@ -67,6 +67,9 @@ def train_test_stimuli(size_image_bank=600,
                               'image_label': [FACE_LABEL] * len(face_paths) + [NONFACE_LABEL] * len(nonface_paths)})
     image_bank.image_paths = dict(zip(image_ids, face_paths + nonface_paths))
     image_bank.identifier = 'faces_nonfaces'
+    # downsample
+    logger.info("Downsampling")
+    image_bank = downsample(image_bank)
     # convert to grayscale
     logger.info("Converting to grayscale")
     image_bank = make_grayscale(image_bank)
@@ -125,8 +128,9 @@ def make_noisy(stimuli: StimulusSet, signal_levels, faces_per_level: int, nonfac
     random_state_ids = RandomState(seed=1)
     random_state_noise = RandomState(seed=1)
 
-    for signal_level in tqdm(signal_levels,
-                             desc='noise'):  # sample a number of face and non-face images per noise level
+    for signal_level in tqdm(signal_levels, desc='noise'):
+        noise_level = 1 - signal_level / 100
+        # sample a number of face and non-face images per noise level
         face_ids = random_state_ids.choice(stimuli['image_id'][stimuli['image_label'] == FACE_LABEL],
                                            faces_per_level, replace=False)
         nonface_ids = random_state_ids.choice(stimuli['image_id'][stimuli['image_label'] == NONFACE_LABEL],
@@ -134,19 +138,23 @@ def make_noisy(stimuli: StimulusSet, signal_levels, faces_per_level: int, nonfac
 
         for image_id in np.concatenate((face_ids, nonface_ids)):  # perturb all chosen images
             source_path = stimuli.get_image(image_id)
+            noisy_image_id = image_id + f'-signal{signal_level}'
             target_path = target_directory / (source_path.stem + f'-signal{signal_level}' + source_path.suffix)
             if skip_if_exist:
                 assert target_path.is_file()
                 # if expecting skip, assume that the file was created under the exact same conditions and re-use
             else:
                 image = Image.open(source_path)
-                noisy_image = make_noisy_image(np.array(image), noise_level=signal_level / 100,
+                noisy_image = make_noisy_image(np.array(image), noise_level=noise_level,
                                                random_state=random_state_noise)
                 noisy_image = Image.fromarray(noisy_image)
                 noisy_image.save(target_path)
             image_meta = stimuli[stimuli['image_id'] == image_id]
             assert len(image_meta) == 1
-            noisy_stimuli.append({**image_meta.iloc[0].to_dict(), **{'signal_level': signal_level}})
+            stimulus_row = {**image_meta.iloc[0].to_dict(),
+                            **{'signal_level': signal_level, 'noise_level': noise_level}}
+            stimulus_row['image_id'] = noisy_image_id
+            noisy_stimuli.append(stimulus_row)
             noisy_paths.append(target_path)
 
     # put everything together in a StimulusSet
@@ -217,6 +225,22 @@ def make_grayscale(stimulus_set: StimulusSet) -> StimulusSet:
         stimulus_set_grayscale.image_paths[image_id] = path_grayscale
     stimulus_set_grayscale.identifier += '-grayscale'
     return stimulus_set_grayscale
+
+
+def downsample(stimulus_set: StimulusSet, downsample_size=64) -> StimulusSet:
+    stimulus_set_downsample = stimulus_set.copy()
+    for image_id in tqdm(stimulus_set_downsample['image_id'], desc='downsample'):
+        path = stimulus_set_downsample.get_image(image_id)
+        image = Image.open(path)
+        directory_downsample = Path(str(path.parent) + '-downsample')
+        directory_downsample.mkdir(exist_ok=True)
+        path_downsample = directory_downsample / (path.stem + '-downsample' + path.suffix)
+        if not path_downsample.is_file():  # only convert and save if needed
+            image_grayscale = image.resize((downsample_size, downsample_size))
+            image_grayscale.save(path_downsample)
+        stimulus_set_downsample.image_paths[image_id] = path_downsample
+    stimulus_set_downsample.identifier += '-downsample'
+    return stimulus_set_downsample
 
 
 def copy_paths(paths, target_directory, skip_if_exist=True):
