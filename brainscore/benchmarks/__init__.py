@@ -193,8 +193,9 @@ def _experimental_benchmark_pool():
     pool['dicarlo.SanghaviMurty2020.IT-pls'] = LazyLoad(DicarloSanghaviMurty2020ITPLS)
     from .rajalingham2020 import DicarloRajalingham2020ITPLS
     pool['dicarlo.Rajalingham2020.IT-pls'] = LazyLoad(DicarloRajalingham2020ITPLS)
-    from .perturbation_prototypes import Rajalingham2019
+    from .perturbation_prototypes import Rajalingham2019, Afraz2006
     pool['dicarlo.Rajalingham2019-deficits'] = LazyLoad(Rajalingham2019)
+    pool['esteky.Afraz2006-face_dependent_shift'] = LazyLoad(Afraz2006)
 
     return pool
 

@@ -324,29 +324,37 @@ class Afraz2006(BenchmarkBase):
         candidate_behaviors = merge_data_arrays(candidate_behaviors)
 
         psychometric_shifts = self.characterize_psychometric_shifts(candidate_behaviors, nonstimulated_behavior)
-        psychometric_shifts_selectivities = self.attach_face_selectivities(psychometric_shifts, face_selectivities)
+        self.attach_face_selectivities(psychometric_shifts, face_selectivities[:subselect])
         score = self._metric(psychometric_shifts, self._assembly)
         # TODO: ceiling normalize
         return score
 
-    def characterize_psychometric_shifts(self, behaviors, nonstimulated_behavior, face_selectivities):
+    def characterize_psychometric_shifts(self, behaviors, nonstimulated_behavior):
         nonstimulated_curve = self.grouped_face_responses(nonstimulated_behavior)
         nonstimulated_logistic = self.fit_logistic(x=nonstimulated_curve['label_signal_level'],
                                                    y=nonstimulated_curve.values)
         nonstimulated_signal_midpoint = self.logistic_midpoint(nonstimulated_logistic)
 
         psychometric_shifts = []
-        for behavior in behaviors:
+        for site_iteration in behaviors['site_iteration'].values:
+            # index instead of `.sel` to preserve all site coords
+            behavior = behaviors[{'site': [site == site_iteration for site in behaviors['site_iteration'].values]}]
+            site_coords = {coord: (dims, values) for coord, dims, values in walk_coords(behavior['site'])}
+            behavior = behavior.squeeze('site')
             psychometric_curve = self.grouped_face_responses(behavior)
             site_logistic = self.fit_logistic(x=psychometric_curve['label_signal_level'],
                                               y=psychometric_curve.values)
-            site_midpoint = self.logistic_midpoint(psychometric_curve)
+            site_midpoint = self.logistic_midpoint(site_logistic)
             psychometric_shift = nonstimulated_signal_midpoint - site_midpoint
-            psychometric_shift = DataAssembly([psychometric_shift], coords={
-                coord: (dims, values) for coord, dims, values in walk_coords(behavior['site'])}, dims=['site'])
+            psychometric_shift = DataAssembly([psychometric_shift], coords=site_coords, dims=['site'])
             psychometric_shifts.append(psychometric_shift)
         psychometric_shifts = merge_data_arrays(psychometric_shifts)
         return psychometric_shifts
+
+    def attach_face_selectivities(self, psychometric_shifts, face_selectivities):
+        assert len(psychometric_shifts) == len(face_selectivities)
+        # assume same ordering
+        psychometric_shifts['face_selectivity'] = 'site', face_selectivities.values
 
     def determine_face_selectivity(self, recordings):
         assert (recordings >= 0).all()
