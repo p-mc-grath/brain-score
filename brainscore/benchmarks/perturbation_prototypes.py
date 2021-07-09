@@ -3,6 +3,7 @@ from pathlib import Path
 
 import numpy as np
 import scipy.io
+from numpy.random import RandomState
 from scipy.optimize import fsolve
 from scipy.stats import pearsonr
 from tqdm import tqdm
@@ -274,10 +275,9 @@ class Afraz2006(BenchmarkBase):
         return assembly, train_stimuli
 
     def __call__(self, candidate: BrainModel):
-        # determine face-selectivity
+        # record to later determine face-selectivity
         candidate.start_recording('IT', time_bins=[(50, 100)])
         recordings = candidate.look_at(self._assembly.stimulus_set)
-        face_selectivities = self.determine_face_selectivity(recordings)
 
         # "We trained two adult macaque monkeys to perform a face/non-face categorization task
         # upon viewing single images from one or the other category that were systematically degraded
@@ -291,8 +291,25 @@ class Afraz2006(BenchmarkBase):
         # We conducted microstimulation experiments at 31 face-selective sites and 55 non-selective sites,
         # while the monkey performed the object categorization task.
         # Selectivity for faces was defined as having a d' value > 1."
-        # We here stimulate all sites that we have recordings in since we only compare the overall trend effects
-        stimulation_locations = np.stack((recordings['tissue_x'], recordings['tissue_y'])).T.tolist()[:10]
+
+        # Recordings were made on an evenly spaced grid, with 1-mm intervals between penetrations over a wide region of
+        # the lower bank of STS and TEa cortices (left hemisphere 14 to 21mm anterior to interauricular line in FR,
+        # and right hemisphere 14 to 20mm anterior to interauricular line in KH). The recording positions were
+        # determined stereotaxically by referring to magnetic resonance images acquired before the surgery.
+        # Multiunit neural responses were recorded through tungsten microelectrodes (0.4–1.0MΩ). Neural selectivity of
+        # neighbouring sites within ±500mm from the stimulated site along each recording track was determined as the
+        # electrode was advanced. The recorded positions were separated by at least 150mm (mean, 296mm). After
+        # determining the neighbourhood selectivity, the electrode tip was positioned in the middle of the recorded
+        # area and remained there through the rest of the experiment. The neural selectivity in this site was verified
+        # before starting the categorization task.
+
+        # We here randomly sub-select the recordings to match the number of stimulation sites in the experiment, based
+        # on the assumption that we can compare trend effects even with a random sample.
+        subselect = 86
+        subselected_neuroid_ids = RandomState(1).choice(recordings['neuroid_id'].values, size=subselect, replace=False)
+        recordings = recordings[{'neuroid': [neuroid_id in subselected_neuroid_ids
+                                             for neuroid_id in recordings['neuroid_id'].values]}]
+        stimulation_locations = np.stack((recordings['tissue_x'], recordings['tissue_y'])).T.tolist()
         candidate_behaviors = []
         for site, location in enumerate(tqdm(stimulation_locations, desc='stimulation locations')):
             candidate.perturb(perturbation=None, target='IT')  # reset
@@ -322,9 +339,13 @@ class Afraz2006(BenchmarkBase):
             behavior = type(behavior)(behavior)  # make sure site is indexed
             candidate_behaviors.append(behavior)
         candidate_behaviors = merge_data_arrays(candidate_behaviors)
-
         psychometric_shifts = self.characterize_psychometric_shifts(candidate_behaviors, nonstimulated_behavior)
+
+        # face selectivities
+        face_selectivities = self.determine_face_selectivity(recordings)
         self.attach_face_selectivities(psychometric_shifts, face_selectivities[:subselect])
+
+        # compare
         score = self._metric(psychometric_shifts, self._assembly)
         # TODO: ceiling normalize
         return score
