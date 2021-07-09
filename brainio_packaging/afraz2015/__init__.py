@@ -29,7 +29,7 @@ def collect_delta_overall_accuracy():
     return assembly
 
 
-def collect_per_site_delta():
+def collect_site_deltas():
     """ fig 3C """
     # data extracted with https://apps.automeris.io/wpd/ on 2021-07-09, points manually selected
     # Note that there is a slight discrepancy in the correlation which is -0.46 in the paper,
@@ -41,4 +41,16 @@ def collect_per_site_delta():
         'monkey': ('site', data['monkey']),
         'face_detection_index_dprime': ('site', data['face_detection_index_dprime']),
     }, dims=['site'])
+    return assembly
+
+def collect_subregion_deltas():
+    """ fig 3D """
+    # data extracted with https://apps.automeris.io/wpd/ on 2021-07-09, points manually selected
+    data = pd.read_csv(Path(__file__).parent / 'fig3D.csv')
+
+    # package into xarray
+    assembly = DataAssembly(data['delta_accuracy'], coords={
+        'monkey': ('subregion', data['monkey']),
+        'face_detection_index_dprime': ('subregion', data['face_detection_index_dprime']),
+    }, dims=['subregion'])
     return assembly
