@@ -1,6 +1,6 @@
 import pytest
 
-from brainscore.benchmarks.perturbation_prototypes import Rajalingham2019
+from brainscore.benchmarks.rajalingham2019 import Rajalingham2019
 
 
 class TestRajalingham2019:
