@@ -1,3 +1,4 @@
+import numpy as np
 from pathlib import Path
 
 import pandas as pd
@@ -9,7 +10,7 @@ def collect_delta_overall_accuracy():
     """ fig 3A """
     # data extracted with https://apps.automeris.io/wpd/ on 2021-07-09, points manually selected
     data = pd.read_csv(Path(__file__).parent / 'fig3A.csv')
-    errors = data.groupby(['visual_field', 'condition']).apply(  # apply)
+    errors = data.groupby(['visual_field', 'condition']).apply(
         lambda group: (group['value'][group['aggregation'] == 'positive_error'].values
                        - group['value'][group['aggregation'] == 'mean'].values)[0])
     data.loc[data['aggregation'] == 'positive_error', 'value'] = errors.values
@@ -43,6 +44,7 @@ def collect_site_deltas():
     }, dims=['site'])
     return assembly
 
+
 def collect_subregion_deltas():
     """ fig 3D """
     # data extracted with https://apps.automeris.io/wpd/ on 2021-07-09, points manually selected
@@ -53,4 +55,25 @@ def collect_subregion_deltas():
         'monkey': ('subregion', data['monkey']),
         'face_detection_index_dprime': ('subregion', data['face_detection_index_dprime']),
     }, dims=['subregion'])
+    return assembly
+
+
+def muscimol_delta_overall_accuracy():
+    """ fig 5b + S4{b,c} """
+    # data extracted with https://apps.automeris.io/wpd/ on 2021-07-09, points manually selected
+    # collect face/other sites for monkey C from 4b, E from 4d, and saline for C from 5B
+    data = pd.read_csv(Path(__file__).parent / 'fig5.csv')
+    errors = data.groupby(['monkey', 'condition']).apply(
+        lambda group: np.absolute(group['value'][group['aggregation'] == 'positive_error'].values
+                                  - group['value'][group['aggregation'] == 'mean'].values)[0])
+    data.loc[data['aggregation'] == 'positive_error', 'value'] = errors.values
+    data.loc[data['aggregation'] == 'positive_error', 'aggregation'] = 'error'
+
+    # package into xarray
+    assembly = DataAssembly(data['value'], coords={
+        'monkey': ('measurement', data['monkey']),
+        'condition': ('measurement', data['condition']),
+        'aggregation': ('measurement', data['aggregation']),
+    }, dims=['measurement'])
+    assembly = assembly.unstack()
     return assembly

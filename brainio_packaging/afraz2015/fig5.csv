@@ -1,0 +1,11 @@
+monkey,condition,aggregation,value
+C,face,mean,-4.40506329113924
+C,face,positive_error,-5.856540084388184
+C,other,mean,2.3797468354430373
+C,other,positive_error,4.810126582278481
+E,face,mean,-8.056768558951966
+E,face,positive_error,-9.890829694323145
+E,other,mean,5
+E,other,positive_error,5.786026200873362
+C,saline,mean,1.1666666666666674
+C,saline,positive_error,1.444444444444445
