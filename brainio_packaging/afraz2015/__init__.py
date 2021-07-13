@@ -1,16 +1,23 @@
 import re
-import pickle
 from pathlib import Path
-import scipy.io
+
 import numpy as np
 import pandas as pd
+import scipy.io
 
 from brainio_base.assemblies import DataAssembly
+from brainio_base.stimuli import StimulusSet
 
 
 def train_test_stimuli():
-    with open(Path(__file__).parent / 'stimuli/metadata_pd.pkl', 'rb') as f:
-        meta = pickle.load(f)
+    stimulus_set = pd.read_pickle(Path(__file__).parent / 'stimuli/metadata_pd.pkl')
+    stimulus_set = StimulusSet(stimulus_set)
+    stimulus_set['image_id'] = stimulus_set['id']
+    image_directory = Path(__file__).parent / 'stimuli/images'
+    stimulus_set.image_paths = {row.image_id: image_directory / f"{row.image_id}.png"
+                                for _, row in stimulus_set.iterrows()}
+    assert all(Path(stimulus_set.get_image(image_id)).is_file() for image_id in stimulus_set['image_id'])
+    return stimulus_set
 
     # "In practice, we first trained the animals on a fixed set of 400 images (200 males and 200 females)."
     fitting_stimuli = ...
