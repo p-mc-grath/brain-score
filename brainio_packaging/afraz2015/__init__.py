@@ -1,9 +1,60 @@
-import numpy as np
+import re
+import pickle
 from pathlib import Path
-
+import scipy.io
+import numpy as np
 import pandas as pd
 
 from brainio_base.assemblies import DataAssembly
+
+
+def train_test_stimuli():
+    with open(Path(__file__).parent / 'stimuli/metadata_pd.pkl', 'rb') as f:
+        meta = pickle.load(f)
+
+    # "In practice, we first trained the animals on a fixed set of 400 images (200 males and 200 females)."
+    fitting_stimuli = ...
+    # "Once trained, we tested the animals’ performance on freshly generated sets of 400 images to confirm that they
+    # could generalize the learning to novel stimuli. As each monkey gained more experience with the task, we
+    # occasionally created a new set of 400 images with slightly increased task difficulty to keep the animal’s
+    # performance level below ceiling (typically between 85–95% correct; chance is 50%). For muscimol experiments,
+    # because the test blocks were shorter, smaller image sets (200 images) were used."
+    test_stimuli_optogenetics = ...
+    test_stimuli_muscimol = ...
+
+
+def collect_assembly():
+    # all experiments with those images (opto, musc, musc2)
+    # where musc2 is the double injection == checkmate
+
+    # there are two values for contra/ipsi stimuli.
+    # if i remember correctly, there are 4 values for opto and musc because arash tested these in
+    # both in the face patch and outside
+    # the musc2 was only done in the face patch
+
+    path = Path(__file__).parent / 'data/afraz2015_data.mat'
+    data = scipy.io.loadmat(path)['summary']
+    struct = {d[0]: v for d, v in zip(data.dtype.descr, data[0, 0])}
+    description = [desc[0] for desc in struct['desc'].squeeze()]
+    parts = [re.match(r"(?P<intervention_type>opto|musc|musc2)_"
+                      r"(?P<selectivity>face|nonface)_"
+                      r"(?P<hemisphere>ipsi|contra)", desc)
+             for desc in description]
+    intervention_type = [part.group("intervention_type") for part in parts]
+    selectivity = [part.group("selectivity") for part in parts]
+    hemisphere = [part.group("hemisphere") for part in parts]
+
+    assembly = DataAssembly([struct['D0'], struct['D1']],
+                            coords={
+                                'injected': [False, True],
+                                'intervention_type': ('injection', intervention_type),
+                                'selectivity': ('injection', selectivity),
+                                'hemisphere': ('injection', hemisphere),
+                                'site_number': ('site', np.arange(struct['D0'].shape[0])),
+                                'site_iteration': ('site', np.arange(struct['D0'].shape[0])),
+                            },
+                            dims=['injected', 'site', 'injection'])
+    return assembly
 
 
 def collect_delta_overall_accuracy():
