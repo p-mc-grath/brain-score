@@ -8,14 +8,12 @@ from tqdm import tqdm
 from xarray import DataArray
 
 from brainio_base.assemblies import merge_data_arrays, walk_coords, DataAssembly
-from brainio_packaging import afraz2006
+from brainio_packaging.afraz2006 import train_test_stimuli, collect_assembly
 from brainscore.benchmarks import BenchmarkBase
 from brainscore.model_interface import BrainModel
 from brainscore.utils import fullname
 
-
-class Afraz2006(BenchmarkBase):
-    BIBTEX = """@article{Afraz2006,
+BIBTEX = """@article{Afraz2006,
                 abstract = {The inferior temporal cortex (IT) of primates is thought to be the final visual area in the ventral stream of cortical areas responsible for object recognition. Consistent with this hypothesis, single IT neurons respond selectively to highly complex visual stimuli such as faces. However, a direct causal link between the activity of face-selective neurons and face perception has not been demonstrated. In the present study of macaque monkeys, we artificially activated small clusters of IT neurons by means of electrical microstimulation while the monkeys performed a categorization task, judging whether noisy visual images belonged to 'face' or 'non-face' categories. Here we show that microstimulation of face-selective sites, but not other sites, strongly biased the monkeys' decisions towards the face category. The magnitude of the effect depended upon the degree of face selectivity of the stimulation site, the size of the stimulated cluster of face-selective neurons, and the exact timing of microstimulation. Our results establish a causal relationship between the activity of face-selective neurons and face perception.},
                 author = {Afraz, Seyed Reza and Kiani, Roozbeh and Esteky, Hossein},
                 doi = {10.1038/nature04982},
@@ -34,6 +32,8 @@ class Afraz2006(BenchmarkBase):
                 year = {2006}
                 }"""
 
+
+class Afraz2006(BenchmarkBase):
     def __init__(self):
         self._logger = logging.getLogger(fullname(self))
         self._assembly, self._fitting_stimuli = self._load_assembly()
@@ -42,12 +42,12 @@ class Afraz2006(BenchmarkBase):
             identifier='esteky.Afraz2006-selective_psychometric_shift',
             ceiling_func=None,
             version=1, parent='IT',
-            bibtex=Afraz2006.BIBTEX)
+            bibtex=BIBTEX)
 
     def _load_assembly(self):
-        assembly = afraz2006.collect_assembly()
+        assembly = collect_assembly()
         # stimuli
-        train_stimuli, test_stimuli = afraz2006.train_test_stimuli()
+        train_stimuli, test_stimuli = train_test_stimuli()
         assembly.attrs['stimulus_set'] = test_stimuli
         return assembly, train_stimuli
 
@@ -116,10 +116,10 @@ class Afraz2006(BenchmarkBase):
             behavior = type(behavior)(behavior)  # make sure site is indexed
             candidate_behaviors.append(behavior)
         candidate_behaviors = merge_data_arrays(candidate_behaviors)
-        psychometric_shifts = self.characterize_psychometric_shifts(candidate_behaviors, nonstimulated_behavior)
+        psychometric_shifts = self.characterize_psychometric_shifts(nonstimulated_behavior, candidate_behaviors)
 
         # face selectivities
-        face_selectivities = self.determine_face_selectivity(recordings)
+        face_selectivities = determine_face_selectivity(recordings)
         self.attach_face_selectivities(psychometric_shifts, face_selectivities[:subselect])
 
         # compare
@@ -127,7 +127,7 @@ class Afraz2006(BenchmarkBase):
         # TODO: ceiling normalize
         return score
 
-    def characterize_psychometric_shifts(self, behaviors, nonstimulated_behavior):
+    def characterize_psychometric_shifts(self, nonstimulated_behavior, behaviors):
         nonstimulated_curve = self.grouped_face_responses(nonstimulated_behavior)
         nonstimulated_logistic = self.fit_logistic(x=nonstimulated_curve['label_signal_level'],
                                                    y=nonstimulated_curve.values)
@@ -154,27 +154,6 @@ class Afraz2006(BenchmarkBase):
         # assume same ordering
         psychometric_shifts['face_selectivity'] = 'site', face_selectivities.values
 
-    def determine_face_selectivity(self, recordings):
-        assert (recordings >= 0).all()
-        # A d' value of zero indicates indistinguishable responses to faces and non-faces.
-        # Increasingly positive d' values indicate progressively better selectivity for faces.
-        # Selectivity for faces was defined as having a d' value > 1.
-        result = []
-        for neuroid_id in tqdm(recordings['neuroid_id'].values, desc='neuron face dprime'):
-            neuron = recordings.sel(neuroid_id=neuroid_id)
-            neuron = neuron.squeeze()
-            face_mean, face_variance = self.multiunit_stats(neuron.sel(image_label='face'))
-            nonface_mean, nonface_variance = self.multiunit_stats(neuron.sel(image_label='nonface'))
-            # face selectivity based on "more positive" firing
-            dprime = (face_mean - nonface_mean) / np.sqrt((face_variance + nonface_variance) / 2)
-            result.append(dprime)
-        result = DataArray(result, coords={'neuroid_id': recordings['neuroid_id'].values}, dims=['neuroid_id'])
-        return result
-
-    def multiunit_stats(self, neuron):
-        mean, var = np.mean(neuron.values), np.var(neuron.values)
-        return mean, var
-
     def grouped_face_responses(self, behavior):
         np.testing.assert_array_equal(behavior['choice'], ['face', 'nonface'])
         behavior['choose_face'] = 'presentation', behavior.argmax('choice')
@@ -194,6 +173,29 @@ class Afraz2006(BenchmarkBase):
         solution = fsolve(func, initial_guess)[0]
         assert np.isclose(logistic(solution, *logistic_params), midpoint)
         return solution
+
+
+def determine_face_selectivity(recordings):
+    assert (recordings >= 0).all()
+    # A d' value of zero indicates indistinguishable responses to faces and non-faces.
+    # Increasingly positive d' values indicate progressively better selectivity for faces.
+    # Selectivity for faces was defined as having a d' value > 1.
+    result = []
+    for neuroid_id in tqdm(recordings['neuroid_id'].values, desc='neuron face dprime'):
+        neuron = recordings.sel(neuroid_id=neuroid_id)
+        neuron = neuron.squeeze()
+        face_mean, face_variance = mean_var(neuron.sel(image_label='face'))
+        nonface_mean, nonface_variance = mean_var(neuron.sel(image_label='nonface'))
+        # face selectivity based on "more positive" firing
+        dprime = (face_mean - nonface_mean) / np.sqrt((face_variance + nonface_variance) / 2)
+        result.append(dprime)
+    result = DataArray(result, coords={'neuroid_id': recordings['neuroid_id'].values}, dims=['neuroid_id'])
+    return result
+
+
+def mean_var(neuron):
+    mean, var = np.mean(neuron.values), np.var(neuron.values)
+    return mean, var
 
 
 def logistic(x, a, b):

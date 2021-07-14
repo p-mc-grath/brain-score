@@ -21,7 +21,7 @@ class BrainModel:
     task to perform
     """
 
-    Perturbation = Enum('Perturbation', " ".join(['muscimol', 'stimulation']))
+    Perturbation = Enum('Perturbation', " ".join(['muscimol', 'microstimulation']))
     """
     perturbation types
     """
@@ -91,6 +91,6 @@ class BrainModel:
             When passed `None`, all perturbations are cleared.
         :param target: what to perturb, e.g. 'IT', or a specific neuroid id
         :param perturbation_parameters: details on the exact perturbation in a dictionary,
-                e.g. {'amount_microliter': 10, 'location': TODO} for muscimol.
+                e.g. {'amount_µl': 10, 'location': TODO} for muscimol.
         """
         raise NotImplementedError()
