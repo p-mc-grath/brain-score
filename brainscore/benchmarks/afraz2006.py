@@ -7,7 +7,7 @@ from scipy.optimize import fsolve
 from tqdm import tqdm
 from xarray import DataArray
 
-from brainio_base.assemblies import merge_data_arrays, walk_coords, DataAssembly
+from brainio.assemblies import merge_data_arrays, walk_coords, DataAssembly
 from brainio_packaging.afraz2006 import train_test_stimuli, collect_assembly
 from brainscore.benchmarks import BenchmarkBase
 from brainscore.model_interface import BrainModel

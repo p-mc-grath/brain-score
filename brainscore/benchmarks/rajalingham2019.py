@@ -4,7 +4,7 @@ import numpy as np
 from scipy.stats import pearsonr
 
 import brainscore
-from brainio_base.assemblies import merge_data_arrays, walk_coords
+from brainio.assemblies import merge_data_arrays, walk_coords
 from brainio_packaging.rajalingham2019 import collect_assembly
 from brainscore.benchmarks import BenchmarkBase
 from brainscore.metrics import Score
