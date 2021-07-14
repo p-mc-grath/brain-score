@@ -49,7 +49,7 @@ class Afraz2015MuscimolDeltaAccuracy(BenchmarkBase):
         gender_stimuli = stimuli[stimuli['category'].isin(['male', 'female'])]
         selectivity_stimuli = stimuli[stimuli['category'].isin(['object', 'face'])]
         gender_stimuli['image_label'] = gender_stimuli['category']
-        assembly.attrs['stimulus_set'] = gender_stimuli.sample(n=60)
+        assembly.attrs['stimulus_set'] = gender_stimuli.sample(n=60, random_state=1)
         return assembly, gender_stimuli, selectivity_stimuli
 
     def __call__(self, candidate: BrainModel):
