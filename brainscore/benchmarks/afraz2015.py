@@ -29,13 +29,89 @@ BIBTEX = """@article {Afraz6730,
         }"""
 
 
+class Afraz2015OptogeneticSelectiveDeltaAccuracy(BenchmarkBase):
+    def __init__(self):
+        self._logger = logging.getLogger(fullname(self))
+        self._assembly, self._fitting_stimuli, self._selectivity_stimuli = load_assembly()
+        self._metric = None  # TODO
+        super(Afraz2015OptogeneticSelectiveDeltaAccuracy, self).__init__(
+            identifier='esteky.Afraz2015.optogenetics-selective_delta_accuracy',
+            ceiling_func=None,
+            version=1, parent='IT',
+            bibtex=BIBTEX)
+
+    def __call__(self, candidate: BrainModel):
+        # record to determine face-selectivity
+        candidate.start_recording('IT', time_bins=[(50, 100)])
+        recordings = candidate.look_at(self._selectivity_stimuli)
+
+        # We here randomly sub-select the recordings to match the number of stimulation sites in the experiment, based
+        # on the assumption that we can compare trend effects even with a random sample.
+        random_state = RandomState(seed=1)
+        num_face_detector_sites = 17  # "photosuppression at high-FD sites (n = 17 sites) [...]"
+        num_nonface_detector_sites = 40 - 17  # "40 experimental sessions" minus the 17 high-FD sites
+        face_selectivity_threshold = 1  # "face-selective units (defined as FD d′ > 1)" (SI Electrophysiology)
+        face_detector_sites, nonface_detector_sites = [], []
+        while len(face_detector_sites) < num_face_detector_sites:
+            neuroid_id = random_state.choice(recordings['neuroid_id'].values)
+            selectivity = determine_selectivity(recordings[{'neuroid': [
+                nid == neuroid_id for nid in recordings['neuroid_id'].values]}])
+            if selectivity > face_selectivity_threshold:
+                face_detector_sites.append(neuroid_id)
+        while len(nonface_detector_sites) < num_nonface_detector_sites:
+            neuroid_id = random_state.choice(recordings['neuroid_id'].values)
+            selectivity = determine_selectivity(recordings[{'neuroid': [
+                nid == neuroid_id for nid in recordings['neuroid_id'].values]}])
+            if selectivity <= face_selectivity_threshold:
+                nonface_detector_sites.append(neuroid_id)
+        recordings = recordings[{'neuroid': [neuroid_id in (face_detector_sites + nonface_detector_sites)
+                                             for neuroid_id in recordings['neuroid_id'].values]}]
+
+        # "In practice, we first trained the animals on a fixed set of 400 images (200 males and 200 females)."
+        candidate.start_task(BrainModel.Task.probabilities, fitting_stimuli=self._fitting_stimuli)
+        unperturbed_behavior = candidate.look_at(self._assembly.stimulus_set)
+
+        # This benchmark ignores the parafoveal presentation of images.
+        suppression_locations = np.stack((recordings['tissue_x'], recordings['tissue_y'])).T.tolist()
+        candidate_behaviors = []
+        for site, location in enumerate(tqdm(suppression_locations, desc='injection locations')):
+            candidate.perturb(perturbation=None, target='IT')  # reset
+            self._logger.debug(f"Suppressing at {location}")
+            candidate.perturb(perturbation=BrainModel.Perturbation.optogenetic_suppression,
+                              target='IT', perturbation_parameters={
+                    # TODO
+                    'location': location,
+                    'amount_µl': 1,  # FIXME
+                })
+            behavior = candidate.look_at(self._assembly.stimulus_set)
+            behavior = behavior.expand_dims('site')
+            behavior['site_iteration'] = 'site', [site]
+            behavior['site_x'] = 'site', [location[0]]
+            behavior['site_y'] = 'site', [location[1]]
+            behavior = type(behavior)(behavior)  # make sure site is indexed
+            candidate_behaviors.append(behavior)
+        candidate_behaviors = merge_data_arrays(candidate_behaviors)
+
+        accuracies = characterize_delta_accuracies(unperturbed_behavior=unperturbed_behavior,
+                                                   perturbed_behaviors=candidate_behaviors)
+
+        # face selectivities
+        selectivities = determine_selectivity(recordings)
+        attach_selectivity(accuracies, selectivities)
+
+        # compare
+        score = self._metric(accuracies, self._assembly)
+        # TODO: ceiling normalize
+        return score
+
+
 class Afraz2015OptogeneticAccuracy(BenchmarkBase):
     def __init__(self):
         self._logger = logging.getLogger(fullname(self))
         self._assembly, self._fitting_stimuli, self._selectivity_stimuli = load_assembly()
         self._metric = None  # TODO
         super(Afraz2015OptogeneticAccuracy, self).__init__(
-            identifier='esteky.Afraz2015.optogenetics-delta_accuracy',
+            identifier='esteky.Afraz2015.optogenetics-accuracy',
             ceiling_func=None,
             version=1, parent='IT',
             bibtex=BIBTEX)
@@ -68,11 +144,11 @@ class Afraz2015OptogeneticAccuracy(BenchmarkBase):
         unperturbed_behavior = candidate.look_at(self._assembly.stimulus_set)
 
         # This benchmark ignores the parafoveal presentation of images.
-        stimulation_locations = np.stack((recordings['tissue_x'], recordings['tissue_y'])).T.tolist()
+        suppression_locations = np.stack((recordings['tissue_x'], recordings['tissue_y'])).T.tolist()
         candidate_behaviors = []
-        for site, location in enumerate(tqdm(stimulation_locations, desc='injection locations')):
+        for site, location in enumerate(tqdm(suppression_locations, desc='injection locations')):
             candidate.perturb(perturbation=None, target='IT')  # reset
-            self._logger.debug(f"Injecting at {location}")
+            self._logger.debug(f"Suppressing at {location}")
             candidate.perturb(perturbation=BrainModel.Perturbation.optogenetic_suppression,
                               target='IT', perturbation_parameters={
                     # TODO
@@ -206,12 +282,12 @@ class Afraz2015MuscimolDeltaAccuracy(BenchmarkBase):
         candidate_behaviors = merge_data_arrays(candidate_behaviors)
 
         # accuracies
-        accuracies = self.characterize_delta_accuracies(unperturbed_behavior=unperturbed_behavior,
-                                                        perturbed_behaviors=candidate_behaviors)
+        accuracies = characterize_delta_accuracies(unperturbed_behavior=unperturbed_behavior,
+                                                   perturbed_behaviors=candidate_behaviors)
 
         # face selectivities
         selectivities = determine_selectivity(recordings)
-        self.attach_selectivity(accuracies, selectivities)
+        attach_selectivity(accuracies, selectivities)
 
         # compare
         score = self._metric(accuracies, self._assembly)

@@ -197,9 +197,12 @@ def _experimental_benchmark_pool():
     pool['dicarlo.Rajalingham2019-deficits'] = LazyLoad(Rajalingham2019)
     from brainscore.benchmarks.afraz2006 import Afraz2006
     pool['esteky.Afraz2006-face_dependent_shift'] = LazyLoad(Afraz2006)
-    from brainscore.benchmarks.afraz2015 import Afraz2015MuscimolDeltaAccuracy, Afraz2015OptogeneticAccuracy
+    from brainscore.benchmarks.afraz2015 import Afraz2015MuscimolDeltaAccuracy, Afraz2015OptogeneticAccuracy, \
+        Afraz2015OptogeneticSelectiveDeltaAccuracy
     pool['dicarlo.Afraz2015.muscimol-delta_accuracy'] = LazyLoad(Afraz2015MuscimolDeltaAccuracy)
     pool['dicarlo.Afraz2015.optogenetics-accuracy'] = LazyLoad(Afraz2015OptogeneticAccuracy)
+    pool['dicarlo.Afraz2015.optogenetics-selective_delta_accuracy'] = LazyLoad(
+        Afraz2015OptogeneticSelectiveDeltaAccuracy)
 
     return pool
 
