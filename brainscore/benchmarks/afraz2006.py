@@ -10,6 +10,7 @@ from xarray import DataArray
 from brainio.assemblies import merge_data_arrays, walk_coords, DataAssembly
 from brainio_packaging.afraz2006 import train_test_stimuli, collect_assembly
 from brainscore.benchmarks import BenchmarkBase
+from brainscore.metrics.significant_correlation import SignificantCorrelation
 from brainscore.model_interface import BrainModel
 from brainscore.utils import fullname
 
@@ -37,7 +38,7 @@ class Afraz2006(BenchmarkBase):
     def __init__(self):
         self._logger = logging.getLogger(fullname(self))
         self._assembly, self._fitting_stimuli = self._load_assembly()
-        self._metric = None  # TODO
+        self._metric = SignificantCorrelation(x_coord='face_selectivity', ignore_nans=True)
         super(Afraz2006, self).__init__(
             identifier='esteky.Afraz2006-selective_psychometric_shift',
             ceiling_func=None,
@@ -124,7 +125,6 @@ class Afraz2006(BenchmarkBase):
 
         # compare
         score = self._metric(psychometric_shifts, self._assembly)
-        # TODO: ceiling normalize
         return score
 
     def characterize_psychometric_shifts(self, nonstimulated_behavior, behaviors):
