@@ -33,6 +33,23 @@ BIBTEX = """@article{Afraz2006,
                 year = {2006}
                 }"""
 
+STIMULATION_PARAMETERS = {
+    # "Microstimulation consisted of bipolar current pulses of 50mA delivered at 200 Hz (refs 19, 20).
+    # The stimulation pulses were biphasic, with the cathodal pulse leading. Each pulse was 0.2 ms in
+    # duration with 0.1 ms between the cathodal and anodal phase. [...] Stimulating pulses were
+    # delivered for 50 ms in one of three time periods following onset of the visual stimulus:
+    # 0–50 ms, 50–100 ms or 100–150 ms."
+    # We here focus on the 100-150ms condition.
+    'current_pulse_mA': 50,
+    'pulse_type': 'biphasic',
+    'pulse_rate_Hz': 200,
+    'pulse_duration_ms': 0.2,
+    'pulse_interval_ms': 0.1,
+    'stimulation_onset_ms': 100,
+    'stimulation_duration_ms': 50,
+}
+STIMULATION_PARAMETERS = frozenset(STIMULATION_PARAMETERS.items())  # make immutable so that params cannot be changed
+
 
 class Afraz2006(BenchmarkBase):
     def __init__(self):
@@ -94,20 +111,8 @@ class Afraz2006(BenchmarkBase):
             self._logger.debug(f"Stimulating at {location}")
             candidate.perturb(perturbation=BrainModel.Perturbation.microstimulation,
                               target='IT', perturbation_parameters={
-                    # "Microstimulation consisted of bipolar current pulses of 50mA delivered at 200 Hz (refs 19, 20).
-                    # The stimulation pulses were biphasic, with the cathodal pulse leading. Each pulse was 0.2 ms in
-                    # duration with 0.1 ms between the cathodal and anodal phase. [...] Stimulating pulses were
-                    # delivered for 50 ms in one of three time periods following onset of the visual stimulus:
-                    # 0–50 ms, 50–100 ms or 100–150 ms."
-                    # We here focus on the 100-150ms condition.
-                    'current_pulse_mA': 50,
-                    'pulse_type': 'biphasic',
-                    'pulse_rate_Hz': 200,
-                    'pulse_duration_ms': 0.2,
-                    'pulse_interval_ms': 0.1,
-                    'stimulation_onset_ms': 100,
-                    'stimulation_duration_ms': 50,
-                    'location': location,
+                    **dict(STIMULATION_PARAMETERS),
+                    **{'location': location},
                 })
             behavior = candidate.look_at(self._assembly.stimulus_set)
             behavior = behavior.expand_dims('site')
