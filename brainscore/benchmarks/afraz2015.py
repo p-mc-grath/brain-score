@@ -1,16 +1,18 @@
 import logging
 
 import numpy as np
+import pingouin as pg
 from numpy.random import RandomState
 from tqdm import tqdm
 from xarray import DataArray
 
 from brainio.assemblies import merge_data_arrays, DataAssembly, walk_coords
-from packaging.afraz2015 import muscimol_delta_overall_accuracy, collect_stimuli
 from brainscore.benchmarks import BenchmarkBase
 from brainscore.benchmarks.afraz2006 import mean_var
+from brainscore.metrics import Score
 from brainscore.model_interface import BrainModel
 from brainscore.utils import fullname
+from packaging.afraz2015 import muscimol_delta_overall_accuracy, collect_stimuli
 
 BIBTEX = """@article {Afraz6730,
             author = {Afraz, Arash and Boyden, Edward S. and DiCarlo, James J.},
@@ -210,7 +212,6 @@ class Afraz2015MuscimolDeltaAccuracy(BenchmarkBase):
     def __init__(self):
         self._logger = logging.getLogger(fullname(self))
         self._assembly, self._fitting_stimuli, self._selectivity_stimuli = load_assembly()
-        self._metric = None  # TODO
         super(Afraz2015MuscimolDeltaAccuracy, self).__init__(
             identifier='esteky.Afraz2015.muscimol-delta_accuracy',
             ceiling_func=None,
@@ -288,11 +289,29 @@ class Afraz2015MuscimolDeltaAccuracy(BenchmarkBase):
         # face selectivities
         selectivities = determine_selectivity(recordings)
         attach_selectivity(accuracies, selectivities)
+        accuracies = type(accuracies)(accuracies)  # make sure all coords are part of MultiIndex
 
-        # compare
-        score = self._metric(accuracies, self._assembly)
-        # TODO: ceiling normalize
-        return score
+        # Typically, we would compare against packaged data with a metric here.
+        # For this dataset, we only have error bars and their significance, but we do not have the raw data
+        # that the significances are computed from.
+        # Because of that, we will _not_ compare candidate prediction against data here, but rather impose data
+        # characterizations on the candidate prediction. Specifically, we will check if:
+        # 1. suppressing face-selective sites leads to a significantly different behavioral effect on accuracy compared
+        # to suppressing non face-selective sites, and
+        # 2. suppressing face-selective sites lead to a negative behavioral effect
+        # (i.e. either no significant effect or only significantly positive)
+        different = self.is_significantly_different(accuracies)
+        score = different and accuracies.sel(is_face_selective=True).mean() < 0
+        return Score([score], coords={'aggregation': ['center']}, dims=['aggregation'])
+
+    def is_significantly_different(self, assembly, significance_threshold=0.05):
+        # convert assembly into dataframe
+        data = assembly.to_pandas().reset_index()
+        data = data.rename(columns={0: 'delta_accuracy'})
+        anova = pg.anova(data=data, dv='delta_accuracy', between='is_face_selective')
+        pvalue = anova['p-unc'][0]
+        significantly_different = pvalue < significance_threshold
+        return significantly_different
 
 
 def characterize_delta_accuracies(unperturbed_behavior, perturbed_behaviors):
@@ -333,6 +352,8 @@ def attach_selectivity(accuracies, selectivities):
     assert len(accuracies) == len(selectivities)
     # assume same ordering
     accuracies['face_selectivity'] = 'site', selectivities.values  # TODO: should this be d'? fig. 4
+    # "face-selective units (defined as FD d′ > 1)" (SI Electrophysiology)
+    accuracies['is_face_selective'] = accuracies['face_selectivity'] > 1
 
 
 def determine_selectivity(recordings):
