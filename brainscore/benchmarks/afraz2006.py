@@ -8,7 +8,7 @@ from tqdm import tqdm
 from xarray import DataArray
 
 from brainio.assemblies import merge_data_arrays, walk_coords, DataAssembly
-from brainio_packaging.afraz2006 import train_test_stimuli, collect_assembly
+from packaging.afraz2006 import train_test_stimuli, collect_assembly
 from brainscore.benchmarks import BenchmarkBase
 from brainscore.metrics.significant_correlation import SignificantCorrelation
 from brainscore.model_interface import BrainModel

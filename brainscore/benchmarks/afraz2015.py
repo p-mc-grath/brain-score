@@ -6,7 +6,7 @@ from tqdm import tqdm
 from xarray import DataArray
 
 from brainio.assemblies import merge_data_arrays, DataAssembly, walk_coords
-from brainio_packaging.afraz2015 import muscimol_delta_overall_accuracy, collect_stimuli
+from packaging.afraz2015 import muscimol_delta_overall_accuracy, collect_stimuli
 from brainscore.benchmarks import BenchmarkBase
 from brainscore.benchmarks.afraz2006 import mean_var
 from brainscore.model_interface import BrainModel
