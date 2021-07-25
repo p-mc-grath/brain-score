@@ -16,9 +16,14 @@ Tutorial
 
 About
 =====
-Brain-Score is a platform that measures how brain-like candidate models are.
-It is agnostic to the model class as long as models can make neural and/or
-behavioral predictions in response to visual stimuli. In a nutshell, Brain-Score evaluates
+The Brain-Score platform aims to yield strong computational models of the ventral stream.
+We enable researchers to quickly get a sense of how their model scores against
+standardized brain benchmarks on multiple dimensions and facilitate
+comparisons to other state-of-the-art models. At the same time, new brain
+data can quickly be tested against a wide range of models to determine how
+well existing models explain the data.
+
+In a nutshell, Brain-Score evaluates
 the similarity to brain regions in the primate ventral stream as well as behavioral outputs,
 and gives a score (usually ranging from 0 to 1) on these various
 brain regions and behavioral benchmarks. This guide is a tutorial for researchers and tinkerers
@@ -80,23 +85,21 @@ The main code for Brain-Score is contained and hosted on `Github`_
 on various repos, free for anyone to fork,
 clone, or download. The main page has 10 repos (9 visible to non-devs)
 that make up the entire source code base- this can be overwhelming, but
-fear not. We will instroduce you to each one, as well as explain that
+fear not. We will introduce you to each one, as well as explain that
 you most likely will only need a single repo to get a model up and scored. It is
 good to see, however, the structure of how Brain-Score operates with its
 various components. They are:
 
-1. ``brain-score``: the heart of the code that runs analysis and comparisons.
-2. ``sample-model-submission``: template and examples for model submissions.
-3. ``candidate_models``: various pre-trained models/models that have already been scored.
-4. ``model-tools``: helper functions that translate from machine learning models
+#. ``brain-score``: the heart of the code that runs analysis and comparisons.
+#. ``sample-model-submission``: template and examples for model submissions.
+#. ``candidate_models``: various pre-trained models/models that have already been scored.
+#. ``model-tools``: helper functions that translate from machine learning models
    to brain models to be tested on brain-score.
-5. ``brainio_collection``: the repo that packages and collects the stimuli/data.
-6. ``brainio_base``: repo that contains various data structures for ``BrainIO``.
-7. ``result_caching``: a helper repo to store the results of function calls so they can
+#. ``brainio``: the packaging and lookup system for data assemblies and stimulus sets.
+#. ``result_caching``: a helper repo to store the results of function calls so they can
    be re-used without re-computing.
-8. ``brain-score.web``: website front and back end.
-9. ``Brainio_contrib`` (archived): used in the past to contribute stimuli and datasets
-   (now part of ``brainio_collection``).
+#. ``brain-score.web``: website front and back end.
+#. ``brainio_base``, ``brainio_collection`` and ``brainio_contrib`` (archived): used in the past to manage stimuli and datasets.
 
 Which repo(s) will I use?
 -----------------------
@@ -580,7 +583,7 @@ Frequently Asked Questions
 
    I would reach out to Martin, Chris, or Jim directly, via the lab website as stated above.
 
-6. **Is there any reward for reaching the top overall Brain-Ccore? Or even a top
+6. **Is there any reward for reaching the top overall Brain-Score? Or even a top
    score on the individual benchmarks?**
 
    We hope to set up a dedicated competition in the near future, but we
