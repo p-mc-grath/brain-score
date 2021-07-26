@@ -10,9 +10,10 @@ from brainio.assemblies import merge_data_arrays, DataAssembly, walk_coords
 from brainscore.benchmarks import BenchmarkBase
 from brainscore.benchmarks.afraz2006 import mean_var
 from brainscore.metrics import Score
+from brainscore.metrics.significant_match import SignificantCorrelation
 from brainscore.model_interface import BrainModel
 from brainscore.utils import fullname
-from packaging.afraz2015 import muscimol_delta_overall_accuracy, collect_stimuli
+from packaging.afraz2015 import muscimol_delta_overall_accuracy, collect_stimuli, collect_site_deltas
 
 BIBTEX = """@article {Afraz6730,
             author = {Afraz, Arash and Boyden, Edward S. and DiCarlo, James J.},
@@ -34,8 +35,10 @@ BIBTEX = """@article {Afraz6730,
 class Afraz2015OptogeneticSelectiveDeltaAccuracy(BenchmarkBase):
     def __init__(self):
         self._logger = logging.getLogger(fullname(self))
-        self._assembly, self._fitting_stimuli, self._selectivity_stimuli = load_assembly()
-        self._metric = None  # TODO
+        self._fitting_stimuli, self._selectivity_stimuli, test_stimuli = load_stimuli()
+        self._assembly = collect_site_deltas()
+        self._assembly.attrs['stimulus_set']= test_stimuli
+        self._metric = SignificantCorrelation(x_coord='face_detection_index_dprime', ignore_nans=True)
         super(Afraz2015OptogeneticSelectiveDeltaAccuracy, self).__init__(
             identifier='esteky.Afraz2015.optogenetics-selective_delta_accuracy',
             ceiling_func=None,
@@ -99,18 +102,19 @@ class Afraz2015OptogeneticSelectiveDeltaAccuracy(BenchmarkBase):
 
         # face selectivities
         selectivities = determine_selectivity(recordings)
-        attach_selectivity(accuracies, selectivities)
+        attach_selectivity(accuracies, selectivities, coord_name='face_detection_index_dprime')
 
         # compare
         score = self._metric(accuracies, self._assembly)
-        # TODO: ceiling normalize
         return score
 
 
 class Afraz2015OptogeneticAccuracy(BenchmarkBase):
     def __init__(self):
         self._logger = logging.getLogger(fullname(self))
-        self._assembly, self._fitting_stimuli, self._selectivity_stimuli = load_assembly()
+        self._fitting_stimuli, self._selectivity_stimuli, test_stimuli = load_stimuli()
+        assembly = collect_delta_overall_accuracy()
+        assembly.attrs['stimulus_set'] = test_stimuli
         self._metric = None  # TODO
         super(Afraz2015OptogeneticAccuracy, self).__init__(
             identifier='esteky.Afraz2015.optogenetics-accuracy',
@@ -211,7 +215,9 @@ class Afraz2015OptogeneticAccuracy(BenchmarkBase):
 class Afraz2015MuscimolDeltaAccuracy(BenchmarkBase):
     def __init__(self):
         self._logger = logging.getLogger(fullname(self))
-        self._assembly, self._fitting_stimuli, self._selectivity_stimuli = load_assembly()
+        self._fitting_stimuli, self._selectivity_stimuli, test_stimuli = load_stimuli()
+        self._assembly = muscimol_delta_overall_accuracy()
+        self._assembly.attrs['stimulus_set'] = test_stimuli
         super(Afraz2015MuscimolDeltaAccuracy, self).__init__(
             identifier='esteky.Afraz2015.muscimol-delta_accuracy',
             ceiling_func=None,
@@ -348,12 +354,12 @@ def per_image_accuracy(behavior):
     return accuracies
 
 
-def attach_selectivity(accuracies, selectivities):
+def attach_selectivity(accuracies, selectivities, coord_name='face_selectivity'):
     assert len(accuracies) == len(selectivities)
     # assume same ordering
-    accuracies['face_selectivity'] = 'site', selectivities.values  # TODO: should this be d'? fig. 4
+    accuracies[coord_name] = 'site', selectivities.values
     # "face-selective units (defined as FD d′ > 1)" (SI Electrophysiology)
-    accuracies['is_face_selective'] = accuracies['face_selectivity'] > 1
+    accuracies['is_face_selective'] = accuracies[coord_name] > 1
 
 
 def determine_selectivity(recordings):
@@ -377,8 +383,7 @@ def determine_selectivity(recordings):
     return result
 
 
-def load_assembly():
-    assembly = muscimol_delta_overall_accuracy()
+def load_stimuli():
     # stimuli
     # TODO: separate train/test
     # TODO All images (60) -- used for testing
@@ -386,5 +391,5 @@ def load_assembly():
     gender_stimuli = stimuli[stimuli['category'].isin(['male', 'female'])]
     selectivity_stimuli = stimuli[stimuli['category'].isin(['object', 'face'])]
     gender_stimuli['image_label'] = gender_stimuli['category']
-    assembly.attrs['stimulus_set'] = gender_stimuli.sample(n=60, random_state=1)
-    return assembly, gender_stimuli, selectivity_stimuli
+    test_stimuli = gender_stimuli.sample(n=60, random_state=1)
+    return gender_stimuli, selectivity_stimuli, test_stimuli
