@@ -203,12 +203,17 @@ class DicarloMajajHong2015ITSpatialCorrelation(BenchmarkBase):
         pairwise_distance_samples = pairwise_distances_all[(*neuroid_pairs,)]
 
         response_samples = assembly.data[neuroid_pairs]
-        response_correlation_samples = np.nan_to_num(cls.corrcoef_rowwise(*response_samples))
+        response_correlation_samples = cls.corrcoef_rowwise(*response_samples)
 
         if neuroid_reliability is not None:
             pairwise_neuroid_reliability_all = cls.create_pairwise_neuroid_reliability_mat(neuroid_reliability)
             pairwise_neuroid_reliability_samples = pairwise_neuroid_reliability_all[(*neuroid_pairs,)]
+
             response_correlation_samples = response_correlation_samples / pairwise_neuroid_reliability_samples
+
+        # properly removing nan values
+        pairwise_distance_samples = pairwise_distance_samples[~np.isnan(response_correlation_samples)]
+        response_correlation_samples = response_correlation_samples[~np.isnan(response_correlation_samples)]
 
         return np.vstack((pairwise_distance_samples, response_correlation_samples))
 
@@ -260,6 +265,7 @@ class DicarloMajajHong2015ITSpatialCorrelation(BenchmarkBase):
         '''
         bound_max_x, bound_max_y = np.max([neuroid.tissue_x.data, neuroid.tissue_y.data], axis=1) - array_size_mm
         rng = np.random.default_rng(seed=seed)
+
         lower_corner = np.column_stack((rng.choice(neuroid.tissue_x.data[neuroid.tissue_x.data <= bound_max_x],
                                                    size=num_sample_arrs),
                                         rng.choice(neuroid.tissue_y.data[neuroid.tissue_y.data <= bound_max_y],
