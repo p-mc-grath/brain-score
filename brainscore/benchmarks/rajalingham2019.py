@@ -1,16 +1,26 @@
+import itertools
 import logging
-
 import numpy as np
+import scipy.io
+import warnings
+from pandas import DataFrame
+from pathlib import Path
+from scipy.spatial.distance import squareform, pdist
 from scipy.stats import pearsonr
+from tqdm import tqdm
+from xarray import DataArray
 
 import brainscore
-from brainio.assemblies import merge_data_arrays, walk_coords
-from packaging.rajalingham2019 import collect_assembly
+from brainio.assemblies import merge_data_arrays, walk_coords, DataAssembly, array_is_element
 from brainscore.benchmarks import BenchmarkBase
 from brainscore.metrics import Score
 from brainscore.metrics.behavior_differences import BehaviorDifferences
+from brainscore.metrics.image_level_behavior import _o2
+from brainscore.metrics.significant_match import SignificantCorrelation
+from brainscore.metrics.transformations import CrossValidation
 from brainscore.model_interface import BrainModel
-from brainscore.utils import fullname
+from brainscore.utils import fullname, LazyLoad
+from packaging.rajalingham2019 import collect_assembly
 
 TASK_LOOKUP = {
     'dog': 'Dog',
@@ -55,7 +65,7 @@ class Rajalingham2019(BenchmarkBase):
             identifier='dicarlo.Rajalingham2019-deficits',
             ceiling_func=None,
             version=1, parent='IT',
-            bibtex=Rajalingham2019.BIBTEX)
+            bibtex=BIBTEX)
 
     def __call__(self, candidate: BrainModel):
         # approach:
@@ -148,7 +158,6 @@ def sample_grid_points(low, high, num_x, num_y):
     grid_x, grid_y = np.meshgrid(np.linspace(low[0], high[0], num_x),
                                  np.linspace(low[1], high[1], num_y))
     return np.dstack((grid_x, grid_y)).reshape(-1, 2)
-
 
 
 class DicarloRajalingham2019SpatialDeficits(BenchmarkBase):
@@ -425,7 +434,7 @@ class DicarloRajalingham2019SpatialDeficits(BenchmarkBase):
         # filter non-nan task measurements from target
         nonnan_tasks = site_target_assembly['task'][~site_target_assembly.isnull()]
         if len(nonnan_tasks) < len(site_target_assembly):
-            warn(f"Ignoring tasks {site_target_assembly['task'][~site_target_assembly.isnull()].values}")
+            warnings.warn(f"Ignoring tasks {site_target_assembly['task'][~site_target_assembly.isnull()].values}")
         site_target_assembly = site_target_assembly.sel(task=nonnan_tasks)
         source_assembly = source_assembly.sel(task=nonnan_tasks.values)
 
