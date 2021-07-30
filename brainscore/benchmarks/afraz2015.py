@@ -11,9 +11,11 @@ from brainscore.benchmarks import BenchmarkBase
 from brainscore.benchmarks.afraz2006 import mean_var
 from brainscore.metrics import Score
 from brainscore.metrics.significant_match import SignificantCorrelation
+from brainscore.metrics.transformations import standard_error_of_the_mean
 from brainscore.model_interface import BrainModel
 from brainscore.utils import fullname
-from packaging.afraz2015 import muscimol_delta_overall_accuracy, collect_stimuli, collect_site_deltas
+from packaging.afraz2015 import muscimol_delta_overall_accuracy, collect_stimuli, collect_site_deltas, \
+    collect_delta_overall_accuracy
 
 BIBTEX = """@article {Afraz6730,
             author = {Afraz, Arash and Boyden, Edward S. and DiCarlo, James J.},
@@ -37,7 +39,7 @@ class Afraz2015OptogeneticSelectiveDeltaAccuracy(BenchmarkBase):
         self._logger = logging.getLogger(fullname(self))
         self._fitting_stimuli, self._selectivity_stimuli, test_stimuli = load_stimuli()
         self._assembly = collect_site_deltas()
-        self._assembly.attrs['stimulus_set']= test_stimuli
+        self._assembly.attrs['stimulus_set'] = test_stimuli
         self._metric = SignificantCorrelation(x_coord='face_detection_index_dprime', ignore_nans=True)
         super(Afraz2015OptogeneticSelectiveDeltaAccuracy, self).__init__(
             identifier='esteky.Afraz2015.optogenetics-selective_delta_accuracy',
@@ -52,23 +54,11 @@ class Afraz2015OptogeneticSelectiveDeltaAccuracy(BenchmarkBase):
 
         # We here randomly sub-select the recordings to match the number of stimulation sites in the experiment, based
         # on the assumption that we can compare trend effects even with a random sample.
-        random_state = RandomState(seed=1)
         num_face_detector_sites = 17  # "photosuppression at high-FD sites (n = 17 sites) [...]"
         num_nonface_detector_sites = 40 - 17  # "40 experimental sessions" minus the 17 high-FD sites
-        face_selectivity_threshold = 1  # "face-selective units (defined as FD d′ > 1)" (SI Electrophysiology)
-        face_detector_sites, nonface_detector_sites = [], []
-        while len(face_detector_sites) < num_face_detector_sites:
-            neuroid_id = random_state.choice(recordings['neuroid_id'].values)
-            selectivity = determine_selectivity(recordings[{'neuroid': [
-                nid == neuroid_id for nid in recordings['neuroid_id'].values]}])
-            if selectivity > face_selectivity_threshold:
-                face_detector_sites.append(neuroid_id)
-        while len(nonface_detector_sites) < num_nonface_detector_sites:
-            neuroid_id = random_state.choice(recordings['neuroid_id'].values)
-            selectivity = determine_selectivity(recordings[{'neuroid': [
-                nid == neuroid_id for nid in recordings['neuroid_id'].values]}])
-            if selectivity <= face_selectivity_threshold:
-                nonface_detector_sites.append(neuroid_id)
+        face_detector_sites, nonface_detector_sites = find_selective_sites(
+            num_face_detector_sites=num_face_detector_sites, num_nonface_detector_sites=num_nonface_detector_sites,
+            recordings=recordings)
         recordings = recordings[{'neuroid': [neuroid_id in (face_detector_sites + nonface_detector_sites)
                                              for neuroid_id in recordings['neuroid_id'].values]}]
 
@@ -113,8 +103,8 @@ class Afraz2015OptogeneticAccuracy(BenchmarkBase):
     def __init__(self):
         self._logger = logging.getLogger(fullname(self))
         self._fitting_stimuli, self._selectivity_stimuli, test_stimuli = load_stimuli()
-        assembly = collect_delta_overall_accuracy()
-        assembly.attrs['stimulus_set'] = test_stimuli
+        self._assembly = collect_delta_overall_accuracy()
+        self._assembly.attrs['stimulus_set'] = test_stimuli
         self._metric = None  # TODO
         super(Afraz2015OptogeneticAccuracy, self).__init__(
             identifier='esteky.Afraz2015.optogenetics-accuracy',
@@ -132,16 +122,9 @@ class Afraz2015OptogeneticAccuracy(BenchmarkBase):
 
         # We here randomly sub-select the recordings to match the number of stimulation sites in the experiment, based
         # on the assumption that we can compare trend effects even with a random sample.
-        random_state = RandomState(seed=1)
         num_face_detector_sites = 17
-        face_selectivity_threshold = 1  # "face-selective units (defined as FD d′ > 1)" (SI Electrophysiology)
-        face_detector_sites = []
-        while len(face_detector_sites) < num_face_detector_sites:
-            neuroid_id = random_state.choice(recordings['neuroid_id'].values)
-            selectivity = determine_selectivity(recordings[{'neuroid': [
-                nid == neuroid_id for nid in recordings['neuroid_id'].values]}])
-            if selectivity > face_selectivity_threshold:
-                face_detector_sites.append(neuroid_id)
+        face_detector_sites, _ = find_selective_sites(
+            num_face_detector_sites=num_face_detector_sites, num_nonface_detector_sites=0, recordings=recordings)
         recordings = recordings[{'neuroid': [neuroid_id in face_detector_sites
                                              for neuroid_id in recordings['neuroid_id'].values]}]
 
@@ -175,14 +158,20 @@ class Afraz2015OptogeneticAccuracy(BenchmarkBase):
         attach_selectivity(candidate_behaviors, selectivities)
 
         # compute per condition accuracy
-        accuracies = self.grouped_accuracy(unperturbed_behavior, candidate_behaviors)
+        unperturbed_accuracy, site_accuracies = self.grouped_accuracy(unperturbed_behavior, candidate_behaviors)
 
-        # compare
+        # Typically, we would compare against packaged data with a metric here.
+        # For this dataset, we only have error bars and their significance, but we do not have the raw data
+        # that the significances are computed from.
+        # Because of that, we will _not_ compare candidate prediction against data here, but rather impose data
+        # characterizations on the candidate prediction. Specifically, we will check if:
+        # 1. behavioral accuracies in the non-suppressed ("image") and suppressed ("image+laser") conditions are
+        # significantly different, and
+        # 2. behavioral accuracy in the non-suppressed condition is significantly higher than with suppression
         score = self._metric(accuracies, self._assembly)
-        # TODO: ceiling normalize
         return score
 
-    def grouped_accuracy(self, unperturbed_behavior, perturbed_behaviors):
+    def site_accuracies(self, unperturbed_behavior, perturbed_behaviors):
         unperturbed_accuracy = per_image_accuracy(unperturbed_behavior)
 
         site_accuracies = []
@@ -200,10 +189,14 @@ class Afraz2015OptogeneticAccuracy(BenchmarkBase):
                 site_image_accuracies[coord] = dims, values
             site_accuracies.append(DataAssembly(site_image_accuracies))
         site_accuracies = merge_data_arrays(site_accuracies)
+        return unperturbed_accuracy, site_accuracies
 
+    def grouped_accuracy(self, unperturbed_accuracy, site_accuracies):
         accuracies = DataAssembly([
-            [unperturbed_accuracy.mean('presentation'), unperturbed_accuracy.std('presentation')],
-            [site_accuracies.mean('presentation').mean('site'), site_accuracies.std('presentation').mean('site')]
+            [unperturbed_accuracy.mean('presentation'),
+             standard_error_of_the_mean(unperturbed_accuracy, 'presentation')],
+            [site_accuracies.mean('presentation').mean('site'),
+             standard_error_of_the_mean(site_accuracies, 'presentation').mean('site')]
         ], coords={
             'laser_on': ('condition', [False, True]),
             'condition_description': ('condition', ['image', 'image+laser']),
@@ -241,23 +234,11 @@ class Afraz2015MuscimolDeltaAccuracy(BenchmarkBase):
         # other IT sites, micro- injections away from high-FD subregions of IT (n = 6)"
         # We here randomly sub-select the recordings to match the number of stimulation sites in the experiment, based
         # on the assumption that we can compare trend effects even with a random sample.
-        random_state = RandomState(seed=1)
         num_face_detector_sites = 6
         num_nonface_detector_sites = 6
-        face_selectivity_threshold = 1  # "face-selective units (defined as FD d′ > 1)" (SI Electrophysiology)
-        face_detector_sites, nonface_detector_sites = [], []
-        while len(face_detector_sites) < num_face_detector_sites:
-            neuroid_id = random_state.choice(recordings['neuroid_id'].values)
-            selectivity = determine_selectivity(recordings[{'neuroid': [
-                nid == neuroid_id for nid in recordings['neuroid_id'].values]}])
-            if selectivity > face_selectivity_threshold:
-                face_detector_sites.append(neuroid_id)
-        while len(nonface_detector_sites) < num_nonface_detector_sites:
-            neuroid_id = random_state.choice(recordings['neuroid_id'].values)
-            selectivity = determine_selectivity(recordings[{'neuroid': [
-                nid == neuroid_id for nid in recordings['neuroid_id'].values]}])
-            if selectivity <= face_selectivity_threshold:
-                nonface_detector_sites.append(neuroid_id)
+        face_detector_sites, nonface_detector_sites = find_selective_sites(
+            num_face_detector_sites=num_face_detector_sites, num_nonface_detector_sites=num_nonface_detector_sites,
+            recordings=recordings)
         recordings = recordings[{'neuroid': [neuroid_id in (face_detector_sites + nonface_detector_sites)
                                              for neuroid_id in recordings['neuroid_id'].values]}]
 
@@ -318,6 +299,27 @@ class Afraz2015MuscimolDeltaAccuracy(BenchmarkBase):
         pvalue = anova['p-unc'][0]
         significantly_different = pvalue < significance_threshold
         return significantly_different
+
+
+def find_selective_sites(num_face_detector_sites, num_nonface_detector_sites, recordings,
+                         # "face-selective units (defined as FD d′ > 1)" (SI Electrophysiology)
+                         face_selectivity_threshold=1,
+                         ):
+    random_state = RandomState(seed=1)
+    face_detector_sites, nonface_detector_sites = [], []
+    while len(face_detector_sites) < num_face_detector_sites:
+        neuroid_id = random_state.choice(recordings['neuroid_id'].values)
+        selectivity = determine_selectivity(recordings[{'neuroid': [
+            nid == neuroid_id for nid in recordings['neuroid_id'].values]}])
+        if selectivity > face_selectivity_threshold:
+            face_detector_sites.append(neuroid_id)
+    while len(nonface_detector_sites) < num_nonface_detector_sites:
+        neuroid_id = random_state.choice(recordings['neuroid_id'].values)
+        selectivity = determine_selectivity(recordings[{'neuroid': [
+            nid == neuroid_id for nid in recordings['neuroid_id'].values]}])
+        if selectivity <= face_selectivity_threshold:
+            nonface_detector_sites.append(neuroid_id)
+    return face_detector_sites, nonface_detector_sites
 
 
 def characterize_delta_accuracies(unperturbed_behavior, perturbed_behaviors):
