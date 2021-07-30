@@ -1,6 +1,6 @@
 """
 A :class:`~brainscore.benchmarks.Benchmark` runs an experiment on a :class:`~brainscore.model_interface.BrainModel`
-and tests the resulting measurements against primate `data <https://github.com/brain-score/brainio_collection>`_.
+and tests the resulting measurements against primate `data <https://github.com/brain-score/brainio>`_.
 This comparison is done by a :class:`~brainscore.metrics.Metric` which outputs a score of how well model and data match.
 This score is normalized with data ceilings and the benchmark returns this ceiled score.
 """
@@ -193,8 +193,16 @@ def _experimental_benchmark_pool():
     pool['dicarlo.SanghaviMurty2020.IT-pls'] = LazyLoad(DicarloSanghaviMurty2020ITPLS)
     from .rajalingham2020 import DicarloRajalingham2020ITPLS
     pool['dicarlo.Rajalingham2020.IT-pls'] = LazyLoad(DicarloRajalingham2020ITPLS)
-    from .perturbation_prototypes import Rajalingham2019
+    from brainscore.benchmarks.rajalingham2019 import Rajalingham2019
     pool['dicarlo.Rajalingham2019-deficits'] = LazyLoad(Rajalingham2019)
+    from brainscore.benchmarks.afraz2006 import Afraz2006
+    pool['esteky.Afraz2006-face_dependent_shift'] = LazyLoad(Afraz2006)
+    from brainscore.benchmarks.afraz2015 import Afraz2015MuscimolDeltaAccuracy, Afraz2015OptogeneticAccuracy, \
+        Afraz2015OptogeneticSelectiveDeltaAccuracy
+    pool['dicarlo.Afraz2015.muscimol-delta_accuracy'] = LazyLoad(Afraz2015MuscimolDeltaAccuracy)
+    pool['dicarlo.Afraz2015.optogenetics-accuracy'] = LazyLoad(Afraz2015OptogeneticAccuracy)
+    pool['dicarlo.Afraz2015.optogenetics-selective_delta_accuracy'] = LazyLoad(
+        Afraz2015OptogeneticSelectiveDeltaAccuracy)
 
     return pool
 
