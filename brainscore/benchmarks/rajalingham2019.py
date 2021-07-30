@@ -14,10 +14,11 @@ from scipy.spatial.distance import squareform, pdist
 from scipy.stats import pearsonr
 from pandas import DataFrame
 from tqdm import tqdm
+from xarray import DataArray
 
 import brainscore
 from brainscore.utils import LazyLoad
-from brainscore.metrics.spatial_correlation import SpatialCorrelationSimilarity
+from brainscore.metrics.significant_match import SignificantCorrelation
 from brainscore.metrics import Score
 from brainscore.metrics.image_level_behavior import _o2
 from brainscore.metrics.transformations import CrossValidation
@@ -27,7 +28,6 @@ from brainscore.model_interface import BrainModel
 from brainio_base.assemblies import merge_data_arrays, walk_coords, array_is_element, DataAssembly
 
 pairwise_distance = DicarloMajajHong2015ITSpatialCorrelation.pairwise_distances
-inv_ks_similarity = DicarloMajajHong2015ITSpatialCorrelation.inv_ks_similarity
 
 BIBTEX = '''@article{RAJALINGHAM2019493,
             title = {Reversible Inactivation of Different Millimeter-Scale Regions of Primate IT Results in Different Patterns of Core Object Recognition Deficits},
@@ -70,8 +70,7 @@ class DicarloRajalingham2019SpatialDeficits(BenchmarkBase):
         self._target_assembly = self._load_assembly()
         self._stimulus_set = self._target_assembly.stimulus_set
         self._target_statistic = LazyLoad(self.compute_response_deficit_distance_target)
-        self._score = SpatialCorrelationSimilarity(similarity_function=inv_ks_similarity,
-                                                   bin_size_mm=.1)  # .1 mm is an arbitrary choice
+        self._score = SignificantCorrelation(x_coord='distance', ignore_nans=True)
 
         self.perturbation = {'type': BrainModel.Perturbation.muscimol,
                              'target': 'IT',
@@ -169,7 +168,11 @@ class DicarloRajalingham2019SpatialDeficits(BenchmarkBase):
         # dealing with nan values while correlating; not np.ma.corrcoef: https://github.com/numpy/numpy/issues/15601
         correlations = DataFrame(behavioral_differences.data).T.corr().values
 
-        statistic = np.array([distances[mask], correlations[mask]])
+        statistic = DataArray(
+            data=correlations[mask],
+            dims=["distance"],
+            coords=dict(
+                distance=(distances[mask])))
 
         return statistic
 
