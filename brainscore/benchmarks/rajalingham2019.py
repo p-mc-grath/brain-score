@@ -1,10 +1,8 @@
 import itertools
 import logging
 import numpy as np
-import scipy.io
 import warnings
 from pandas import DataFrame
-from pathlib import Path
 from scipy.spatial.distance import squareform, pdist
 from scipy.stats import pearsonr
 from tqdm import tqdm
@@ -19,7 +17,7 @@ from brainscore.metrics.image_level_behavior import _o2
 from brainscore.metrics.significant_match import SignificantCorrelation
 from brainscore.metrics.transformations import CrossValidation
 from brainscore.model_interface import BrainModel
-from brainscore.utils import fullname, LazyLoad
+from brainscore.utils import fullname
 from packaging.rajalingham2019 import collect_assembly
 
 TASK_LOOKUP = {
@@ -51,34 +49,36 @@ BIBTEX = """@article{RAJALINGHAM2019493,
                 }"""
 
 
-class Rajalingham2019(BenchmarkBase):
-    def __init__(self):
+class _Rajalingham2019(BenchmarkBase):
+    def __init__(self, identifier, metric):
         self._target_assembly = collect_assembly()
         self._training_stimuli = brainscore.get_stimulus_set('dicarlo.hvm')
         self._training_stimuli['image_label'] = self._training_stimuli['object_name']
         # use only those images where it's the same object (label)
         self._training_stimuli = self._training_stimuli[self._training_stimuli['object_name'].isin(
             self._target_assembly.stimulus_set['object_name'])]
-        self._similarity_metric = BehaviorDifferences()
+        self._test_stimuli = self._target_assembly.stimulus_set
+        # "Each inactivation session began with a single focal microinjection of 1ml of muscimol
+        # (5mg/mL, Sigma Aldrich) at a slow rate (100nl/min) via a 30-gauge stainless-steel cannula at
+        # the targeted site in ventral IT."
+        self.perturbation = {'type': BrainModel.Perturbation.muscimol,
+                             'target': 'IT',
+                             'perturbation_parameters': {'amount_µl': 1,
+                                                         'location': None}}
+
+        self._metric = metric
         self._logger = logging.getLogger(fullname(self))
-        super(Rajalingham2019, self).__init__(
-            identifier='dicarlo.Rajalingham2019-deficits',
+        super(_Rajalingham2019, self).__init__(
+            identifier=identifier,
             ceiling_func=None,
             version=1, parent='IT',
             bibtex=BIBTEX)
 
     def __call__(self, candidate: BrainModel):
-        # approach:
-        # 1. have model inactivate many different sites in IT
-        # 2. benchmark metric searches over those sites to find the ones that maximally correspond to 7/8 tasks
-        # 3. test generalization to 8th task (measuring distance), cross-validate
-
-        stimulus_set = self._target_assembly.stimulus_set
-        # Training
         # TODO: Both animals were previously trained on other images of other objects, and were proficient in
         #  discriminating among over 35 arbitrarily sampled basic-level object categories
-        training_stimuli = stimulus_set  # self._training_stimuli
-        # stimulus_set = repeat_trials(number_of_trials=10) TODO
+        training_stimuli = self._training_stimuli
+        candidate.start_task(task=BrainModel.Task.probabilities, fitting_stimuli=training_stimuli)
 
         # "[...] inactivation sessions were interleaved over days with control behavioral sessions.
         # Thus, each inactivation experiment consisted of three behavioral sessions:
@@ -86,115 +86,14 @@ class Rajalingham2019(BenchmarkBase):
         # the inactivation session,
         # and the recovery or post-control session (2 days after injection)"
         # --> we here front-load one control session and then run many inactivation sessions
-
         # control
-        candidate.perturb(perturbation=None, target='IT')  # reset
-        candidate.start_task(task=BrainModel.Task.probabilities, fitting_stimuli=training_stimuli)
-        control_behavior = candidate.look_at(stimulus_set, number_of_trials=None)
-        control_behavior = control_behavior.expand_dims('injected')
-        control_behavior['injected'] = [False]
+        unperturbed_behavior = self.perform_task(candidate, perturbation=None)
 
         # silencing sessions
-        behaviors = [control_behavior]
+        behaviors = [unperturbed_behavior]
         # "We varied the location of microinjections to randomly sample the ventral surface of IT
         # (from approximately + 8mm AP to approx + 20mm AP)."
         # stay between [0, 10] since that is the extent of the tissue
-        injection_locations = sample_grid_points([2, 2], [8, 8], num_x=3, num_y=3)
-        # injection_locations = sample_grid_points([2, 2], [8, 8], num_x=10, num_y=10)
-        for site, injection_location in enumerate(injection_locations):
-            candidate.perturb(perturbation=None, target='IT')  # reset
-            self._logger.debug(f"Perturbing at {injection_location}")
-            candidate.perturb(perturbation=BrainModel.Perturbation.muscimol,
-                              target='IT', perturbation_parameters={
-                    # "Each inactivation session began with a single focal microinjection of 1ml of muscimol
-                    # (5mg/mL, Sigma Aldrich) at a slow rate (100nl/min) via a 30-gauge stainless-steel cannula at
-                    # the targeted site in ventral IT."
-                    'amount_µl': 1,
-                    'location': injection_location,
-                })
-            behavior = candidate.look_at(stimulus_set)  # TODO the whole stimulus_set each session?
-            behavior = behavior.expand_dims('injected').expand_dims('site')
-            behavior['injected'] = [True]
-            behavior['site_iteration'] = 'site', [site]
-            behavior['site_x'] = 'site', [injection_location[0]]
-            behavior['site_y'] = 'site', [injection_location[1]]
-            behavior = type(behavior)(behavior)  # make sure site and injected are indexed
-            behaviors.append(behavior)
-        behaviors = merge_data_arrays(behaviors)
-
-        # align naming: from stimulus_set object name to assembly task
-        # unfortunately setting `['object_name'] = ...` directly fails due to MultiIndex, so we'll re-create.
-        behaviors = self.align_task_names(behaviors)
-
-        # score
-        # behaviors = behaviors.unstack('presentation').stack(presentation=['image_id', 'run'])
-        score = self._similarity_metric(behaviors, self._target_assembly)
-        # score = ceil(score, self.ceiling)
-        return score
-
-    def align_task_names(self, behaviors):
-        behaviors = type(behaviors)(behaviors.values, coords={
-            coord: (dims, values if coord not in ['object_name', 'truth', 'image_label', 'choice']
-            else [TASK_LOOKUP[name] if name in TASK_LOOKUP else name for name in behaviors[coord].values])
-            for coord, dims, values in walk_coords(behaviors)},
-                                    dims=behaviors.dims)
-        return behaviors
-
-    def _rearrange_sites_tasks(self, data, tasks_per_site, number_of_sites):
-        assert data.shape[-1] == tasks_per_site * number_of_sites
-        return np.reshape(data, list(data.shape[:-1]) + [tasks_per_site, number_of_sites], order='F')
-
-    @property
-    def ceiling(self):
-        split1, split2 = self._target_assembly.sel(split=0), self._target_assembly.sel(split=1)
-        split1_diffs = split1.sel(silenced=False) - split1.sel(silenced=True)
-        split2_diffs = split2.sel(silenced=False) - split2.sel(silenced=True)
-        split_correlation, p = pearsonr(split1_diffs.values.flatten(), split2_diffs.values.flatten())
-        return Score([split_correlation], coords={'aggregation': ['center']}, dims=['aggregation'])
-
-
-def sample_grid_points(low, high, num_x, num_y):
-    assert len(low) == len(high) == 2
-    grid_x, grid_y = np.meshgrid(np.linspace(low[0], high[0], num_x),
-                                 np.linspace(low[1], high[1], num_y))
-    return np.dstack((grid_x, grid_y)).reshape(-1, 2)
-
-
-class DicarloRajalingham2019SpatialDeficits(BenchmarkBase):
-    def __init__(self):
-        super().__init__(identifier='dicarlo.Rajalingham2019.IT-spatial_deficit_similarity',
-                         ceiling_func=lambda: None,
-                         version=0.1,
-                         parent='IT',
-                         bibtex=BIBTEX)
-        self._target_assembly = collect_assembly()
-        self._stimulus_set = self._target_assembly.stimulus_set
-        self._target_statistic = LazyLoad(self.compute_response_deficit_distance_target)
-        self._metric = SignificantCorrelation(x_coord='distance')
-
-        self.perturbation = {'type': BrainModel.Perturbation.muscimol,
-                             'target': 'IT',
-                             'perturbation_parameters': {'amount_µl': 1,
-                                                         'location': None}}
-
-    def __call__(self, candidate: BrainModel):
-        behaviors = self.run_experiment_on_model(candidate)
-        dprime_assembly_all = self.characterize(behaviors)
-        dprime_assembly = self.subselect_tasks(dprime_assembly_all, self._target_assembly)
-        candidate_assembly = dprime_assembly.transpose('injected', 'site', 'task')  # match target assembly shape
-        candidate_statistic = self.compute_response_deficit_distance_candidate(candidate_assembly)
-
-        score = self._metric(candidate_statistic, self._target_statistic)
-        # score.attrs['target_statistic'] = self._target_statistic
-        # score.attrs['candidate_statistic'] = candidate_statistic
-        return score
-
-    def run_experiment_on_model(self, candidate: BrainModel):
-        training_stimuli = self._stimulus_set  # TODO: true?
-        candidate.start_task(task=BrainModel.Task.probabilities, fitting_stimuli=training_stimuli)
-        unperturbed_behavior = self.perform_task(candidate, perturbation=None)
-
-        behaviors = [unperturbed_behavior]
         injection_locations = self.sample_grid_points([2, 2], [8, 8], num_x=4, num_y=4)
         for site, injection_location in enumerate(injection_locations):
             perturbation = self.perturbation
@@ -206,7 +105,9 @@ class DicarloRajalingham2019SpatialDeficits(BenchmarkBase):
 
         behaviors = merge_data_arrays(behaviors)
         behaviors = self.align_task_names(behaviors)
-        return behaviors
+
+        score = self._metric(behaviors, self._target_assembly)
+        return score
 
     def perform_task(self, candidate: BrainModel, perturbation):
         if perturbation is None:
@@ -216,7 +117,7 @@ class DicarloRajalingham2019SpatialDeficits(BenchmarkBase):
 
     def _perform_task_unperturbed(self, candidate: BrainModel):
         candidate.perturb(perturbation=None, target='IT')  # reset
-        behavior = candidate.look_at(self._stimulus_set, number_of_trials=None)
+        behavior = candidate.look_at(self._test_stimuli, number_of_trials=None)
         behavior = behavior.expand_dims('injected')
         behavior['injected'] = [False]
 
@@ -227,7 +128,7 @@ class DicarloRajalingham2019SpatialDeficits(BenchmarkBase):
         candidate.perturb(perturbation=perturbation['type'],
                           target=perturbation['target'],
                           perturbation_parameters=perturbation['perturbation_parameters'])
-        behavior = candidate.look_at(self._stimulus_set)
+        behavior = candidate.look_at(self._test_stimuli)
 
         behavior = behavior.expand_dims('injected').expand_dims('site')
         behavior['injected'] = [True]
@@ -239,13 +140,57 @@ class DicarloRajalingham2019SpatialDeficits(BenchmarkBase):
 
         return behavior
 
-    def compute_response_deficit_distance_target(self):
-        dprime_assembly = self._target_assembly.mean('bootstrap',
-                                                     skipna=True)  # obviously skipna no effect
+    @staticmethod
+    def align_task_names(behaviors):
+        behaviors = type(behaviors)(behaviors.values, coords={
+            coord: (dims, values if coord not in ['object_name', 'truth', 'image_label', 'choice']
+            else [TASK_LOOKUP[name] if name in TASK_LOOKUP else name for name in behaviors[coord].values])
+            for coord, dims, values in walk_coords(behaviors)},
+                                    dims=behaviors.dims)
+        return behaviors
+
+    @staticmethod
+    def sample_grid_points(low, high, num_x, num_y):
+        assert len(low) == len(high) == 2
+        grid_x, grid_y = np.meshgrid(np.linspace(low[0], high[0], num_x),
+                                     np.linspace(low[1], high[1], num_y))
+        return np.stack((grid_x.flatten(), grid_y.flatten()), axis=1)  # , np.zeros(num_x * num_y) for empty z dimension
+
+
+def Rajalingham2019():
+    metric = BehaviorDifferences()
+    return _Rajalingham2019(identifier='dicarlo.Rajalingham2019-deficit_statistics', metric=metric)
+
+
+def DicarloRajalingham2019SpatialDeficits():
+    metric = SpatialCharacterizationMetric()
+    return _Rajalingham2019(identifier='dicarlo.Rajalingham2019.IT-spatial_deficit_similarity', metric=metric)
+
+
+class SpatialCharacterizationMetric:
+    def __init__(self):
+        # the metric operating on characterized assemblies
+        self._similarity_metric = SignificantCorrelation(x_coord='distance')
+
+    def __call__(self, behaviors, target):
+        dprime_assembly_all = self.characterize(behaviors)
+        dprime_assembly = self.subselect_tasks(dprime_assembly_all, target)
+        candidate_assembly = dprime_assembly.transpose('injected', 'site', 'task')  # match target assembly shape
+        candidate_statistic = self.compute_response_deficit_distance_candidate(candidate_assembly)
+        target_statistic = self.compute_response_deficit_distance_target(target)
+
+        score = self._similarity_metric(candidate_statistic, target_statistic)
+        # score.attrs['target_statistic'] = target_statistic
+        # score.attrs['candidate_statistic'] = candidate_statistic
+        return score
+
+    def compute_response_deficit_distance_target(self, target_assembly):
+        dprime_assembly = target_assembly.mean('bootstrap',
+                                               skipna=True)  # obviously skipna no effect
 
         mask = np.full((dprime_assembly.site.size, dprime_assembly.site.size), False)
         for i in range(len(mask)):
-            if i < 10:
+            if i < 10:  # TODO: use named meta data in coordinates rather than obscure indices
                 mask[i, i:10] = True  # monkey 1, task 1, upper triangle
             elif i < 17:
                 mask[i, i:17] = True  # monkey 2, task 1, upper triangle
@@ -282,15 +227,6 @@ class DicarloRajalingham2019SpatialDeficits(BenchmarkBase):
 
         return squareform(pdist(locations, metric='euclidean'))
 
-    @staticmethod
-    def align_task_names(behaviors):
-        behaviors = type(behaviors)(behaviors.values, coords={
-            coord: (dims, values if coord not in ['object_name', 'truth', 'image_label', 'choice']
-            else [TASK_LOOKUP[name] if name in TASK_LOOKUP else name for name in behaviors[coord].values])
-            for coord, dims, values in walk_coords(behaviors)},
-                                    dims=behaviors.dims)
-        return behaviors
-
     @property
     def ceiling(self):
         split1, split2 = self._target_assembly.sel(split=0), self._target_assembly.sel(split=1)
@@ -298,13 +234,6 @@ class DicarloRajalingham2019SpatialDeficits(BenchmarkBase):
         split2_diffs = split2.sel(silenced=False) - split2.sel(silenced=True)
         split_correlation, p = pearsonr(split1_diffs.values.flatten(), split2_diffs.values.flatten())
         return Score([split_correlation], coords={'aggregation': ['center']}, dims=['aggregation'])
-
-    @staticmethod
-    def sample_grid_points(low, high, num_x, num_y):
-        assert len(low) == len(high) == 2
-        grid_x, grid_y = np.meshgrid(np.linspace(low[0], high[0], num_x),
-                                     np.linspace(low[1], high[1], num_y))
-        return np.stack((grid_x.flatten(), grid_y.flatten()), axis=1)  # , np.zeros(num_x * num_y) for empty z dimension
 
     @staticmethod
     def characterize(assembly):
