@@ -68,6 +68,14 @@ def collect_assembly(contra_hemisphere=True):
     assembly = DataAssembly(assembly)  # reindex
 
     # load stimulus_set subsampled from hvm
+    stimulus_set = collect_stimulus_set(contra_hemisphere=contra_hemisphere)
+    assembly.attrs['stimulus_set'] = stimulus_set
+    assembly.attrs['stimulus_set_identifier'] = stimulus_set.identifier
+    return assembly
+
+
+def collect_stimulus_set(contra_hemisphere=True):
+    # load stimulus_set subsampled from hvm
     stimulus_set_meta = scipy.io.loadmat('/braintree/home/msch/rr_share_topo/topoDCNN/dat/metaparams.mat')
     stimulus_set_ids = stimulus_set_meta['id']
     stimulus_set_ids = [i for i in stimulus_set_ids if len(set(i)) > 1]  # filter empty ids
@@ -78,6 +86,4 @@ def collect_assembly(contra_hemisphere=True):
     stimulus_set.identifier = 'dicarlo.hvm_10'
     if contra_hemisphere:
         stimulus_set = stimulus_set[(stimulus_set['rxz'] > 0) & (stimulus_set['variation'] == 6)]
-    assembly.attrs['stimulus_set'] = stimulus_set
-    assembly.attrs['stimulus_set_identifier'] = stimulus_set.identifier
-    return assembly
+    return stimulus_set
