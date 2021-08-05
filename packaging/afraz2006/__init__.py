@@ -9,8 +9,8 @@ from PIL import Image
 from numpy.random.mtrand import RandomState
 from tqdm import tqdm
 
-from brainio_base.assemblies import DataAssembly
-from brainio_base.stimuli import StimulusSet
+from brainio.assemblies import DataAssembly
+from brainio.stimuli import StimulusSet
 
 logger = logging.getLogger(__name__)
 

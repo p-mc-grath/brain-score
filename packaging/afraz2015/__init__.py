@@ -5,8 +5,8 @@ import numpy as np
 import pandas as pd
 import scipy.io
 
-from brainio_base.assemblies import DataAssembly
-from brainio_base.stimuli import StimulusSet
+from brainio.assemblies import DataAssembly
+from brainio.stimuli import StimulusSet
 
 
 def collect_stimuli():

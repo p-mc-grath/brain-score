@@ -5,7 +5,7 @@ import numpy as np
 from scipy.stats import pearsonr
 from tqdm import tqdm
 
-from brainio_base.assemblies import merge_data_arrays, walk_coords, array_is_element, DataAssembly
+from brainio.assemblies import merge_data_arrays, walk_coords, array_is_element, DataAssembly
 from brainscore.metrics import Metric, Score
 from brainscore.metrics.image_level_behavior import _o2
 from brainscore.metrics.transformations import TestOnlyCrossValidationSingle, CrossValidation
