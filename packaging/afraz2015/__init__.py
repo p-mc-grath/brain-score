@@ -141,3 +141,17 @@ def muscimol_delta_overall_accuracy():
     }, dims=['measurement'])
     assembly = assembly.unstack()
     return assembly
+
+
+def site_suppression_distribution():
+    """ fig 2C """
+    # data extracted with https://apps.automeris.io/wpd/ on 2021-08-09, points manually selected
+    data = pd.read_csv(Path(__file__).parent / 'fig2C.csv')
+    # histogram with count, get rid of digitization errors
+    data['number_of_sites'] = data['number_of_sites'].astype(int)
+
+    # package into xarray
+    assembly = DataAssembly(data['number_of_sites'], coords={
+        'spikes_deleted_percent': data['percent_spikes_deleted'],
+    }, dims=['spikes_deleted_percent'])
+    return assembly
