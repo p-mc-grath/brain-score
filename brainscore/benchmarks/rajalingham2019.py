@@ -63,7 +63,7 @@ class _Rajalingham2019(BenchmarkBase):
         # the targeted site in ventral IT."
         self.perturbation = {'type': BrainModel.Perturbation.muscimol,
                              'target': 'IT',
-                             'perturbation_parameters': {'amount_µl': 1,
+                             'perturbation_parameters': {'amount_microliter': 1,
                                                          'location': None}}
 
         self._metric = metric

@@ -76,7 +76,7 @@ class Afraz2015OptogeneticSelectiveDeltaAccuracy(BenchmarkBase):
                               target='IT', perturbation_parameters={
                     # TODO
                     'location': location,
-                    'amount_µl': 1,  # FIXME
+                    'amount_microliter': 1,  # FIXME
                 })
             behavior = candidate.look_at(self._assembly.stimulus_set)
             behavior = behavior.expand_dims('site')
@@ -142,7 +142,7 @@ class Afraz2015OptogeneticAccuracy(BenchmarkBase):
                               target='IT', perturbation_parameters={
                     # TODO
                     'location': location,
-                    'amount_µl': 1,  # FIXME
+                    'amount_microliter': 1,  # FIXME
                 })
             behavior = candidate.look_at(self._assembly.stimulus_set)
             behavior = behavior.expand_dims('site')
@@ -255,7 +255,7 @@ class Afraz2015MuscimolDeltaAccuracy(BenchmarkBase):
             candidate.perturb(perturbation=BrainModel.Perturbation.muscimol,
                               target='IT', perturbation_parameters={
                     # "1 μL of muscimol (5 mg/mL) was injected at 0.1 μL/min rate"
-                    'amount_µl': 1,
+                    'amount_microliter': 1,
                     'mg_per_ml': 5,
                     'rate_µl_per_min': 0.1,
                     'location': location,
