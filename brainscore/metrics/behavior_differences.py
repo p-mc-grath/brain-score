@@ -34,7 +34,7 @@ class BehaviorDifferences(Metric):
 
         # compare
         site_split = TestOnlyCrossValidationSingle(  # instantiate on-the-fly to control the kfolds for 1 test site each
-            split_coord='site', stratification_coord=None, kfold=True, splits=len(assembly2['site']))
+            split_coord='site_iteration', stratification_coord=None, kfold=True, splits=len(assembly2['site']))
         score = site_split(assembly2_differences,
                            apply=lambda site_assembly: self.apply_site(assembly1_differences, site_assembly))
         return score
