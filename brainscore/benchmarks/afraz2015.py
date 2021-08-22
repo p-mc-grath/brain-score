@@ -1,17 +1,16 @@
 import logging
-
 import numpy as np
 import pingouin as pg
+import xarray as xr
 from numpy.random import RandomState
 from tqdm import tqdm
 from xarray import DataArray
 
-from brainio.assemblies import merge_data_arrays, DataAssembly, walk_coords
+from brainio.assemblies import merge_data_arrays, DataAssembly, walk_coords, array_is_element
 from brainscore.benchmarks import BenchmarkBase
 from brainscore.benchmarks.afraz2006 import mean_var
 from brainscore.metrics import Score
 from brainscore.metrics.significant_match import SignificantCorrelation
-from brainscore.metrics.transformations import standard_error_of_the_mean
 from brainscore.model_interface import BrainModel
 from brainscore.utils import fullname
 from packaging.afraz2015 import muscimol_delta_overall_accuracy, collect_stimuli, collect_site_deltas, \
@@ -105,7 +104,6 @@ class Afraz2015OptogeneticAccuracy(BenchmarkBase):
         self._fitting_stimuli, self._selectivity_stimuli, test_stimuli = load_stimuli()
         self._assembly = collect_delta_overall_accuracy()
         self._assembly.attrs['stimulus_set'] = test_stimuli
-        self._metric = None  # TODO
         super(Afraz2015OptogeneticAccuracy, self).__init__(
             identifier='esteky.Afraz2015.optogenetics-accuracy',
             ceiling_func=None,
@@ -140,9 +138,7 @@ class Afraz2015OptogeneticAccuracy(BenchmarkBase):
             self._logger.debug(f"Suppressing at {location}")
             candidate.perturb(perturbation=BrainModel.Perturbation.optogenetic_suppression,
                               target='IT', perturbation_parameters={
-                    # TODO
                     'location': location,
-                    'amount_microliter': 1,  # FIXME
                 })
             behavior = candidate.look_at(self._assembly.stimulus_set)
             behavior = behavior.expand_dims('site')
@@ -158,8 +154,26 @@ class Afraz2015OptogeneticAccuracy(BenchmarkBase):
         attach_selectivity(candidate_behaviors, selectivities)
 
         # compute per condition accuracy
-        unperturbed_accuracy, site_accuracies = self.grouped_accuracy(unperturbed_behavior, candidate_behaviors)
+        unperturbed_accuracy = per_image_accuracy(unperturbed_behavior)
+        site_accuracies = per_image_accuracy(candidate_behaviors)
+        grouped_accuracy = self.group_accuracy(unperturbed_accuracy, site_accuracies)
 
+        # compute score
+        score = self.metric(grouped_accuracy)
+        return score
+
+    def group_accuracy(self, unperturbed_accuracy, site_accuracies):
+        site_coords = site_accuracies['site']
+        site_accuracies = stack_multiindex(site_accuracies, 'presentation')
+        site_accuracies['laser_on'] = 'presentation', [True] * len(site_accuracies['presentation'])
+        unperturbed_accuracy['laser_on'] = 'presentation', [False] * len(unperturbed_accuracy['presentation'])
+        # in order to concatenate, we need the same coordinates on all data assemblies
+        for coord, dims, values in walk_coords(site_coords):
+            unperturbed_accuracy[coord] = 'presentation', [None] * len(unperturbed_accuracy['presentation'])
+        grouped_accuracy = xr.concat([site_accuracies, DataAssembly(unperturbed_accuracy)], dim='presentation')
+        return DataAssembly(grouped_accuracy)  # make sure MultiIndex is built
+
+    def metric(self, grouped_accuracy):
         # Typically, we would compare against packaged data with a metric here.
         # For this dataset, we only have error bars and their significance, but we do not have the raw data
         # that the significances are computed from.
@@ -168,8 +182,12 @@ class Afraz2015OptogeneticAccuracy(BenchmarkBase):
         # 1. behavioral accuracies in the non-suppressed ("image") and suppressed ("image+laser") conditions are
         # significantly different, and
         # 2. behavioral accuracy in the non-suppressed condition is significantly higher than with suppression
-        score = self._metric(accuracies, self._assembly)
-        return score
+        different = is_significantly_different(DataAssembly(grouped_accuracy), between='laser_on')
+        unperturbed_accuracy = grouped_accuracy.sel(laser_on=False).mean('presentation')
+        site_accuracies = grouped_accuracy.sel(laser_on=True).mean()  # mean over everything at once
+        unperturbed_accuracy_higher = unperturbed_accuracy > site_accuracies
+        score = different and unperturbed_accuracy_higher
+        return Score([score], coords={'aggregation': ['center']}, dims=['aggregation'])
 
     def site_accuracies(self, unperturbed_behavior, perturbed_behaviors):
         unperturbed_accuracy = per_image_accuracy(unperturbed_behavior)
@@ -191,18 +209,18 @@ class Afraz2015OptogeneticAccuracy(BenchmarkBase):
         site_accuracies = merge_data_arrays(site_accuracies)
         return unperturbed_accuracy, site_accuracies
 
-    def grouped_accuracy(self, unperturbed_accuracy, site_accuracies):
-        accuracies = DataAssembly([
-            [unperturbed_accuracy.mean('presentation'),
-             standard_error_of_the_mean(unperturbed_accuracy, 'presentation')],
-            [site_accuracies.mean('presentation').mean('site'),
-             standard_error_of_the_mean(site_accuracies, 'presentation').mean('site')]
-        ], coords={
-            'laser_on': ('condition', [False, True]),
-            'condition_description': ('condition', ['image', 'image+laser']),
-            'aggregation': ['center', 'error']
-        }, dims=['condition', 'aggregation'])
-        return accuracies
+
+def stack_multiindex(assembly, new_dim):
+    indices = [np.arange(assembly.shape[dim]) for dim in range(len(assembly.shape))]
+    mesh_indices = np.meshgrid(*indices)
+    raveled_indices = [index.ravel('F') for index in mesh_indices]  # column-major order to ensure proper re-ordering
+    raveled_indices = {dim: index for dim, index in zip(assembly.dims, raveled_indices)}
+    raveled_values = assembly.values.ravel()
+    stacked_assembly = type(assembly)(raveled_values,
+                                      coords={coord: (new_dim, values[raveled_indices[dims[0]]])
+                                              for coord, dims, values in walk_coords(assembly)},
+                                      dims=[new_dim])
+    return stacked_assembly
 
 
 class Afraz2015MuscimolDeltaAccuracy(BenchmarkBase):
@@ -270,14 +288,19 @@ class Afraz2015MuscimolDeltaAccuracy(BenchmarkBase):
         candidate_behaviors = merge_data_arrays(candidate_behaviors)
 
         # accuracies
-        accuracies = characterize_delta_accuracies(unperturbed_behavior=unperturbed_behavior,
-                                                   perturbed_behaviors=candidate_behaviors)
+        delta_accuracies = characterize_delta_accuracies(unperturbed_behavior=unperturbed_behavior,
+                                                         perturbed_behaviors=candidate_behaviors)
 
         # face selectivities
         selectivities = determine_selectivity(recordings)
-        attach_selectivity(accuracies, selectivities)
-        accuracies = type(accuracies)(accuracies)  # make sure all coords are part of MultiIndex
+        attach_selectivity(delta_accuracies, selectivities)
+        delta_accuracies = type(delta_accuracies)(delta_accuracies)  # make sure all coords are part of MultiIndex
 
+        # compute score
+        score = self.metric(delta_accuracies)
+        return score
+
+    def metric(self, delta_accuracies):
         # Typically, we would compare against packaged data with a metric here.
         # For this dataset, we only have error bars and their significance, but we do not have the raw data
         # that the significances are computed from.
@@ -287,18 +310,27 @@ class Afraz2015MuscimolDeltaAccuracy(BenchmarkBase):
         # to suppressing non face-selective sites, and
         # 2. suppressing face-selective sites lead to a negative behavioral effect
         # (i.e. either no significant effect or only significantly positive)
-        different = self.is_significantly_different(accuracies)
-        score = different and accuracies.sel(is_face_selective=True).mean() < 0
+        different = is_significantly_different(delta_accuracies, between='is_face_selective')
+        negative_effect = delta_accuracies.sel(is_face_selective=True).mean() < 0
+        score = different and negative_effect
         return Score([score], coords={'aggregation': ['center']}, dims=['aggregation'])
 
-    def is_significantly_different(self, assembly, significance_threshold=0.05):
-        # convert assembly into dataframe
-        data = assembly.to_pandas().reset_index()
-        data = data.rename(columns={0: 'delta_accuracy'})
-        anova = pg.anova(data=data, dv='delta_accuracy', between='is_face_selective')
-        pvalue = anova['p-unc'][0]
-        significantly_different = pvalue < significance_threshold
-        return significantly_different
+
+def is_significantly_different(assembly, between, significance_threshold=0.05):
+    """
+    ANOVA between conditions
+    :param assembly: the assembly with the values to compare
+    :param between: condition to compare between, e.g. "is_face_selective"
+    :param significance_threshold: p-value threshold, e.g. 0.05
+    :return:
+    """
+    # convert assembly into dataframe
+    data = assembly.to_pandas().reset_index()
+    data = data.rename(columns={0: 'values'})
+    anova = pg.anova(data=data, dv='values', between=between)
+    pvalue = anova['p-unc'][0]
+    significantly_different = pvalue < significance_threshold
+    return significantly_different
 
 
 def find_selective_sites(num_face_detector_sites, num_nonface_detector_sites, recordings,
@@ -347,12 +379,12 @@ def characterize_delta_accuracies(unperturbed_behavior, perturbed_behaviors):
 def per_image_accuracy(behavior):
     labels = behavior['image_label']
     correct_choice_index = [behavior['choice'].values.tolist().index(label) for label in labels]
-    behavior = behavior.transpose('presentation', 'choice')  # we're operating on numpy array directly below
+    behavior = behavior.transpose('presentation', 'choice', ...)  # we're operating on numpy array directly below
     accuracies = behavior.values[np.arange(len(behavior)), correct_choice_index]
     accuracies = DataAssembly(accuracies,
                               coords={coord: (dims, values) for coord, dims, values
-                                      in walk_coords(behavior['presentation'])},
-                              dims=['presentation'])
+                                      in walk_coords(behavior) if not array_is_element(dims, 'choice')},
+                              dims=('presentation',) + behavior.dims[2:])
     return accuracies
 
 
