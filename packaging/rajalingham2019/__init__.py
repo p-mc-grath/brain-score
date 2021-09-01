@@ -62,9 +62,9 @@ def collect_assembly(contra_hemisphere=True):
     # add site locations
     path = Path(__file__).parent / 'xray_3d.mat'
     site_locations = scipy.io.loadmat(path)['MX']
-    assembly['site_x'] = 'site', site_locations[:, 0]
-    assembly['site_y'] = 'site', site_locations[:, 1]
-    assembly['site_z'] = 'site', site_locations[:, 2]
+    assembly['site_x'] = 'site', site_locations[:, 0] / 1000  # scale micro to mili
+    assembly['site_y'] = 'site', site_locations[:, 1] / 1000
+    assembly['site_z'] = 'site', site_locations[:, 2] / 1000
     assembly = DataAssembly(assembly)  # reindex
 
     # load stimulus_set subsampled from hvm
