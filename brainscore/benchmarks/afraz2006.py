@@ -175,7 +175,10 @@ class Afraz2006(BenchmarkBase):
     def logistic_midpoint(self, logistic_params, midpoint=0.5, initial_guess=0):
         func = lambda x: logistic(x, *logistic_params) - midpoint
         solution = fsolve(func, initial_guess)[0]
-        assert np.isclose(logistic(solution, *logistic_params), midpoint)
+        fit_midpoint = logistic(solution, *logistic_params)
+        assert np.isclose(fit_midpoint, midpoint), f"Unable to find midpoint: " \
+                                                   f"{fit_midpoint} (with parameters {logistic_params}) " \
+                                                   f"is different from target midpoint {midpoint}"
         return solution
 
 
