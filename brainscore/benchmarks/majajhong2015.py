@@ -1,3 +1,5 @@
+from xarray import DataArray
+
 import brainscore
 from brainscore.model_interface import BrainModel
 from brainscore.benchmarks import BenchmarkBase
@@ -10,6 +12,8 @@ from brainscore.metrics.spatial_correlation import SpatialCorrelationSimilarity
 from brainscore.metrics.inter_individual_stats_ceiling import InterIndividualStatisticsCeiling
 from brainscore.utils import LazyLoad
 import numpy as np
+import pandas as pd
+import xarray as xr
 from scipy.spatial.distance import squareform, pdist
 
 VISUAL_DEGREES = 8
@@ -144,7 +148,7 @@ class DicarloMajajHong2015ITSpatialCorrelation(BenchmarkBase):
 
         self._target_statistic = self.compute_global_tissue_statistic_target()
 
-        score = self._score(np.hstack(self._target_statistic), candidate_statistic)
+        score = self._score(self._target_statistic, candidate_statistic)
         score.attrs['target_statistic'] = self._target_statistic
         score.attrs['candidate_statistic'] = candidate_statistic
 
@@ -155,33 +159,63 @@ class DicarloMajajHong2015ITSpatialCorrelation(BenchmarkBase):
         Simulates placement of multiple arrays in tissue and computes repsonse correlation as a function of distance on
         each of them
         :param candidate_assembly: NeuroidAssembly
-        :return: list of lists, [0] pairwise reponse correlation, [1] corresponding distances
+        :return: xr DataArray: values = correlations; coordinates: distances, source, array
         '''
-        candidate_statistic = []
-        for window in self.sample_array_locations(candidate_assembly.neuroid, self.num_sample_arrs,
-                                                  self._array_size_mm):
-            array_statistic = self.sample_response_corr_vs_dist(candidate_assembly[window],
-                                                                int(self.bootstrap_samples / self.num_sample_arrs))
-            candidate_statistic.append(array_statistic)
+        candidate_statistic_list = []
+        bootstrap_samples_per_array = int(self.bootstrap_samples / self.num_sample_arrs)
+        for i, window in enumerate(self.sample_array_locations(candidate_assembly.neuroid)):
+            distances, correlations = self.sample_response_corr_vs_dist(candidate_assembly[window],
+                                                                        bootstrap_samples_per_array)
 
-        return np.hstack(candidate_statistic)
+            array_statistic = self.to_xarray(correlations, distances, array=str(i))
+            candidate_statistic_list.append(array_statistic)
+
+        candidate_statistic = xr.concat(candidate_statistic_list, dim='meta')
+        return candidate_statistic
 
     def compute_global_tissue_statistic_target(self):
         '''
-        :return: list of [pairwise distances, pairwise response correlations], each item is another animal/array
-            combination from the MajajHong Assembly
+        :return: xr DataArray: values = correlations; coordinates: distances, source, array
         '''
-        target_statistic = []
+        target_statistic_list = []
         for animal in sorted(list(set(self._target_assembly.neuroid.animal.data))):
             for arr in sorted(list(set(self._target_assembly.neuroid.arr.data))):
                 sub_assembly = self._target_assembly.sel(animal=animal, arr=arr)
                 bootstrap_samples_sub_assembly = int(self.bootstrap_samples * (sub_assembly.neuroid.size /
                                                                                self._target_assembly.neuroid.size))
-                sub_assembly_statistic = self.sample_response_corr_vs_dist(sub_assembly, bootstrap_samples_sub_assembly,
-                                                                           self._neuroid_reliability)
-                target_statistic.append(sub_assembly_statistic)
 
+                distances, correlations = self.sample_response_corr_vs_dist(sub_assembly,
+                                                                            bootstrap_samples_sub_assembly,
+                                                                            self._neuroid_reliability)
+
+                sub_assembly_statistic = self.to_xarray(correlations, distances, source=animal, array=arr)
+                target_statistic_list.append(sub_assembly_statistic)
+
+        target_statistic = xr.concat(target_statistic_list, dim='meta')
         return target_statistic
+
+    def sample_array_locations(self, neuroid, seed=0):
+        '''
+        Generator: Sample Utah array-like portions from artificial model tissue and generate masks
+        :param neuroid: NeuroidAssembly.neuroid
+        :param seed: random seed
+        :return: list of masks in neuroid dimension of assembly, usage: assembly[mask] -> neuroids within one array
+        '''
+        bound_max_x, bound_max_y = np.max([neuroid.tissue_x.data, neuroid.tissue_y.data], axis=1) - self._array_size_mm
+        rng = np.random.default_rng(seed=seed)
+
+        lower_corner = np.column_stack((rng.choice(neuroid.tissue_x.data[neuroid.tissue_x.data <= bound_max_x],
+                                                   size=self.num_sample_arrs),
+                                        rng.choice(neuroid.tissue_y.data[neuroid.tissue_y.data <= bound_max_y],
+                                                   size=self.num_sample_arrs)))
+        upper_corner = lower_corner + self._array_size_mm
+
+        # create index masks of neuroids within sample windows
+        for i in range(self.num_sample_arrs):
+            yield np.logical_and.reduce([neuroid.tissue_x.data <= upper_corner[i, 0],
+                                         neuroid.tissue_x.data >= lower_corner[i, 0],
+                                         neuroid.tissue_y.data <= upper_corner[i, 1],
+                                         neuroid.tissue_y.data >= lower_corner[i, 1]])
 
     @classmethod
     def sample_response_corr_vs_dist(cls, assembly, num_samples, neuroid_reliability=None, seed=0):
@@ -218,6 +252,25 @@ class DicarloMajajHong2015ITSpatialCorrelation(BenchmarkBase):
         return np.vstack((pairwise_distance_samples, response_correlation_samples))
 
     @staticmethod
+    def to_xarray(correlations, distances, source='model', array=None):
+        '''
+        :param values: list of data values
+        :param distances: list of distance values, each distance value has to correspond to one data value
+        :param source: name of monkey
+        :param array: name of recording array
+        '''
+        xarray_statistic = DataArray(
+            data=correlations,
+            dims=["meta"],
+            coords={
+                'meta': pd.MultiIndex.from_product([distances, [source], [array]],
+                                                   names=('distances', 'source', 'array'))
+            }
+        )
+
+        return xarray_statistic
+
+    @staticmethod
     def corrcoef_rowwise(a, b):
         # https://stackoverflow.com/questions/41700840/correlation-of-2-time-dependent-multidimensional-signals-signal-vectors
         a_ma = a - a.mean(1)[:, None]
@@ -252,32 +305,6 @@ class DicarloMajajHong2015ITSpatialCorrelation(BenchmarkBase):
                 c_mat[i, j] = np.sqrt(ci * cj)
 
         return c_mat
-
-    @staticmethod
-    def sample_array_locations(neuroid, num_sample_arrs, array_size_mm, seed=0):
-        '''
-        Generator: Sample Utah array-like portions from artificial model tissue and generate masks
-        :param neuroid: NeuroidAssembly.neuroid
-        :param num_sample_arrs: number of simulated Utah arrays you want to sample
-        :param array_size_mm: Tuple, physical size of the arrays you want to sample in mm
-        :param seed: random seed
-        :return: list of masks in neuroid dimension of assembly, usage: assembly[mask] -> neuroids within one array
-        '''
-        bound_max_x, bound_max_y = np.max([neuroid.tissue_x.data, neuroid.tissue_y.data], axis=1) - array_size_mm
-        rng = np.random.default_rng(seed=seed)
-
-        lower_corner = np.column_stack((rng.choice(neuroid.tissue_x.data[neuroid.tissue_x.data <= bound_max_x],
-                                                   size=num_sample_arrs),
-                                        rng.choice(neuroid.tissue_y.data[neuroid.tissue_y.data <= bound_max_y],
-                                                   size=num_sample_arrs)))
-        upper_corner = lower_corner + array_size_mm
-
-        # create index masks of neuroids within sample windows
-        for i in range(num_sample_arrs):
-            yield np.logical_and.reduce([neuroid.tissue_x.data <= upper_corner[i, 0],
-                                         neuroid.tissue_x.data >= lower_corner[i, 0],
-                                         neuroid.tissue_y.data <= upper_corner[i, 1],
-                                         neuroid.tissue_y.data >= lower_corner[i, 1]])
 
     @staticmethod
     def tissue_update(assembly):

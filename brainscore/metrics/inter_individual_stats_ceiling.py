@@ -25,18 +25,28 @@ class InterIndividualStatisticsCeiling(Ceiling):
         '''
         :param metric: used to compute the ceiling
         '''
-        self.metric = metric
+        self._metric = metric
 
-    def __call__(self, target_statistic):
+    def __call__(self, statistic):
         '''
         Applies given metric to dataset, comparing data from one animal to all remaining animals, i.e.:
-        For each animal: metric({dataset\animal_i}, animal_i)
-        :param target_statistic: list of n lists, every second element expected to contain data from another animal
+        For each animal: metric({dataset\animal_i}, animal_i): cross validation like
+        :param statistic: xarray structure with values & and corresponding meta information: distances, source
         :return: ceiling
         '''
+        assert len(set(statistic.source.data)) > 1, 'your stats contain less than 2 animals'
+        self.statistic = statistic
+
         scores = []
-        for held_out in range(0, len(target_statistic) - 1, 2):
-            score = self.metric(np.hstack(target_statistic[:held_out] + target_statistic[held_out + 2:]),
-                                np.hstack(target_statistic[held_out:held_out + 2]))
-            scores.append(score.data[0])
+        for monkey in set(self.statistic.source.data):
+            score = self._score_monkey(monkey)
+            scores.append(score)
+
         return _aggregate(scores)
+
+    def _score_monkey(self, monkey):
+        monkey_pool = self.statistic.where(self.statistic.source != monkey, drop=True)
+        held_out_monkey = self.statistic.sel(source=monkey)
+
+        score = self._metric(monkey_pool, held_out_monkey)
+        return score.data[0]

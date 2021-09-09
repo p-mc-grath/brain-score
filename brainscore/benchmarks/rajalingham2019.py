@@ -1,6 +1,8 @@
 import itertools
 import logging
 import numpy as np
+import xarray as xr
+import pandas as pd
 import warnings
 from pandas import DataFrame
 from scipy.spatial.distance import squareform, pdist
@@ -15,6 +17,7 @@ from brainscore.metrics import Score
 from brainscore.metrics.behavior_differences import BehaviorDifferences
 from brainscore.metrics.image_level_behavior import _o2
 from brainscore.metrics.significant_match import SignificantCorrelation
+from brainscore.metrics.spatial_correlation import SpatialCorrelationSimilarity
 from brainscore.metrics.transformations import CrossValidation
 from brainscore.model_interface import BrainModel
 from brainscore.utils import fullname
@@ -94,7 +97,13 @@ class _Rajalingham2019(BenchmarkBase):
         # "We varied the location of microinjections to randomly sample the ventral surface of IT
         # (from approximately + 8mm AP to approx + 20mm AP)."
         # stay between [0, 10] since that is the extent of the tissue
-        injection_locations = self.sample_grid_points([2, 2], [8, 8], num_x=4, num_y=4)
+        muscimol_spread = 1.17  # TODO remove 5 lines ?? or push
+        spacing_factor = 1
+        injection_locations = np.random.rand(300) * (
+                10 - muscimol_spread * spacing_factor)  # self.sample_grid_points([2, 2], [8, 8], num_x=4, num_y=4)
+        injection_locations = injection_locations[injection_locations > muscimol_spread * spacing_factor]
+        injection_locations = injection_locations[:100]
+        injection_locations = injection_locations.reshape((50, 2))
         for site, injection_location in enumerate(injection_locations):
             perturbation = self.perturbation
             perturbation['perturbation_parameters']['location'] = injection_location
@@ -167,10 +176,24 @@ def DicarloRajalingham2019SpatialDeficits():
     return _Rajalingham2019(identifier='dicarlo.Rajalingham2019.IT-spatial_deficit_similarity', metric=metric)
 
 
+def DicarloRajalingham2019SpatialDeficitsQuantified():
+    def inv_ks_similarity(p, q):
+        '''
+        Inverted ks similarity -> resulting in a score within [0,1], 1 being a perfect match
+        '''
+        import scipy.stats
+        return 1 - scipy.stats.ks_2samp(p, q)[0]
+
+    metric = SpatialCharacterizationMetric()
+    metric._similarity_metric = SpatialCorrelationSimilarity(similarity_function=inv_ks_similarity, bin_size_mm=.5)
+    return _Rajalingham2019(identifier='dicarlo.Rajalingham2019.IT-spatial_deficit_similarity_quantified',
+                            metric=metric)
+
+
 class SpatialCharacterizationMetric:
     def __init__(self):
         # the metric operating on characterized assemblies
-        self._similarity_metric = SignificantCorrelation(x_coord='distance')
+        self._similarity_metric = SignificantCorrelation(x_coord='distances')
 
     def __call__(self, behaviors, target):
         dprime_assembly_all = self.characterize(behaviors)
@@ -179,45 +202,61 @@ class SpatialCharacterizationMetric:
         candidate_statistic = self.compute_response_deficit_distance_candidate(candidate_assembly)
         target_statistic = self.compute_response_deficit_distance_target(target)
 
-        score = self._similarity_metric(candidate_statistic, target_statistic)
-        # score.attrs['target_statistic'] = target_statistic
-        # score.attrs['candidate_statistic'] = candidate_statistic
+        score = self._similarity_metric(target_statistic, candidate_statistic)
         return score
 
     def compute_response_deficit_distance_target(self, target_assembly):
-        dprime_assembly = target_assembly.mean('bootstrap',
-                                               skipna=True)  # obviously skipna no effect
+        dprime_assembly = target_assembly.mean('bootstrap')
 
-        mask = np.full((dprime_assembly.site.size, dprime_assembly.site.size), False)
-        for i in range(len(mask)):
-            if i < 10:  # TODO: use named meta data in coordinates rather than obscure indices
-                mask[i, i:10] = True  # monkey 1, task 1, upper triangle
-            elif i < 17:
-                mask[i, i:17] = True  # monkey 2, task 1, upper triangle
-            else:
-                mask[i, i:] = True  # monkey 2, task 2, upper triangle
+        statistics_list = []
+        for monkey in set(dprime_assembly.monkey.data):
+            # for array in set(dprime_assembly.array):
+            sub_assembly = dprime_assembly.sel(monkey=monkey)  # , array=array)
+            distances, correlations = self._compute_response_deficit_distance(sub_assembly)
+            mask = np.triu_indices(sub_assembly.site.size)
 
-        return self._compute_response_deficit_distance(dprime_assembly, mask)
+            statistics_list.append(
+                self.to_xarray(correlations[mask], distances[mask], source=monkey))  # , array=array))
+
+        return xr.concat(statistics_list, dim='meta')
 
     def compute_response_deficit_distance_candidate(self, dprime_assembly):
+        distances, correlations = self._compute_response_deficit_distance(dprime_assembly)
         mask = np.triu_indices(dprime_assembly.site.size)
 
-        return self._compute_response_deficit_distance(dprime_assembly, mask)
+        return self.to_xarray(correlations[mask], distances[mask])
 
-    def _compute_response_deficit_distance(self, dprime_assembly, mask):
+    def _compute_response_deficit_distance(self, dprime_assembly):
+        '''
+        :param dprime_assembly: assembly of behavioral performance
+        :return: square matrices with correlation and distance values; each matrix elem == value between site_i, site_j
+        '''
         distances = self.pairwise_distances(dprime_assembly)
 
         behavioral_differences = self.compute_differences(dprime_assembly)
         # dealing with nan values while correlating; not np.ma.corrcoef: https://github.com/numpy/numpy/issues/15601
         correlations = DataFrame(behavioral_differences.data).T.corr().values
 
-        statistic = DataArray(
-            data=correlations[mask],
-            dims=["distance"],
-            coords=dict(
-                distance=(distances[mask])))
+        return distances, correlations
 
-        return statistic
+    @staticmethod
+    def to_xarray(correlations, distances, source='model', array=None):
+        '''
+        :param values: list of data values
+        :param distances: list of distance values, each distance value has to correspond to one data value
+        :param source: name of monkey
+        :param array: name of recording array
+        '''
+        xarray_statistic = DataArray(
+            data=correlations,
+            dims=["meta"],
+            coords={
+                'meta': pd.MultiIndex.from_product([distances, [source], [array]],
+                                                   names=('distances', 'source', 'array'))
+            }
+        )
+
+        return xarray_statistic
 
     @staticmethod
     def pairwise_distances(dprime_assembly):

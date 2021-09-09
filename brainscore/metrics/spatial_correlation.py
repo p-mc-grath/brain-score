@@ -23,7 +23,7 @@ class SpatialCorrelationSimilarity(Metric):
     distributions
     '''
 
-    def __init__(self, similarity_function, bin_size_mm):
+    def __init__(self, similarity_function, bin_size_mm) -> object:
         '''
         :param similarity_function: similarity_function to be applied to each bin
         :param bin_size_mm: size per bin in mm | one fixed size, utilize Score.RAW_VALUES_KEY to change weighting
@@ -38,14 +38,14 @@ class SpatialCorrelationSimilarity(Metric):
         '''
         self.target_statistic = target_statistic
         self.candidate_statistic = candidate_statistic
-        self._bin_min = np.min(self.target_statistic[0])
-        self._bin_max = np.max(self.target_statistic[0])
+        self._bin_min = np.min(self.target_statistic.distances)
+        self._bin_max = np.max(self.target_statistic.distances)
 
         bin_scores = []
         for in_bin_t, in_bin_c, enough_data in self._bin_masks():
             if enough_data:
-                bin_scores.append(self.similarity_function(self.target_statistic[1, in_bin_t],
-                                                           self.candidate_statistic[1, in_bin_c]))
+                bin_scores.append(self.similarity_function(self.target_statistic.values[in_bin_t],
+                                                           self.candidate_statistic.values[in_bin_c]))
 
         return _aggregate(bin_scores)
 
@@ -55,11 +55,11 @@ class SpatialCorrelationSimilarity(Metric):
         :yield: mask(target, current_bin), mask(candidate, current_bin), enough data in the bins to do further computations
         '''
         for lower_bound_mm in np.linspace(self._bin_min, self._bin_max,
-                                          int(self._bin_max * (1 / self.bin_size) + 1)):
-            t = np.where(np.logical_and(self.target_statistic[0] >= lower_bound_mm,
-                                        self.target_statistic[0] < lower_bound_mm + self.bin_size))[0]
-            c = np.where(np.logical_and(self.candidate_statistic[0] >= lower_bound_mm,
-                                        self.candidate_statistic[0] < lower_bound_mm + self.bin_size))[0]
+                                          int(self._bin_max * (1 / self.bin_size) + 1) * 2):
+            t = np.where(np.logical_and(self.target_statistic.distances >= lower_bound_mm,
+                                        self.target_statistic.distances < lower_bound_mm + self.bin_size))[0]
+            c = np.where(np.logical_and(self.candidate_statistic.distances >= lower_bound_mm,
+                                        self.candidate_statistic.distances < lower_bound_mm + self.bin_size))[0]
             enough_data = t.size > 0 and c.size > 0  # random threshold
 
             yield t, c, enough_data
