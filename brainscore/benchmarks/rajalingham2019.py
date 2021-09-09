@@ -16,11 +16,12 @@ from brainscore.benchmarks import BenchmarkBase
 from brainscore.metrics import Score
 from brainscore.metrics.behavior_differences import BehaviorDifferences
 from brainscore.metrics.image_level_behavior import _o2
+from brainscore.metrics.inter_individual_stats_ceiling import InterIndividualStatisticsCeiling
 from brainscore.metrics.significant_match import SignificantCorrelation
 from brainscore.metrics.spatial_correlation import SpatialCorrelationSimilarity
 from brainscore.metrics.transformations import CrossValidation
 from brainscore.model_interface import BrainModel
-from brainscore.utils import fullname
+from brainscore.utils import fullname, LazyLoad
 from packaging.rajalingham2019 import collect_assembly
 
 TASK_LOOKUP = {
@@ -184,10 +185,17 @@ def DicarloRajalingham2019SpatialDeficitsQuantified():
         import scipy.stats
         return 1 - scipy.stats.ks_2samp(p, q)[0]
 
+    similarity_metric = SpatialCorrelationSimilarity(similarity_function=inv_ks_similarity,
+                                                     bin_size_mm=.8)  # arbitrary bin size
     metric = SpatialCharacterizationMetric()
-    metric._similarity_metric = SpatialCorrelationSimilarity(similarity_function=inv_ks_similarity, bin_size_mm=.5)
-    return _Rajalingham2019(identifier='dicarlo.Rajalingham2019.IT-spatial_deficit_similarity_quantified',
-                            metric=metric)
+    metric._similarity_metric = similarity_metric
+    benchmark = _Rajalingham2019(identifier='dicarlo.Rajalingham2019.IT-spatial_deficit_similarity_quantified',
+                                 metric=metric)
+
+    # TODO really messy solution | only works after benchmark metric has been called once
+    benchmark._ceiling_func = lambda: InterIndividualStatisticsCeiling(similarity_metric)(
+        benchmark._metric._similarity_metric.target_statistic)
+    return benchmark
 
 
 class SpatialCharacterizationMetric:
