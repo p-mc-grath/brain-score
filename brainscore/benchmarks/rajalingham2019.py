@@ -2,6 +2,7 @@ import itertools
 import logging
 import numpy as np
 import warnings
+from numpy.random import RandomState
 from pandas import DataFrame
 from scipy.spatial.distance import squareform, pdist
 from scipy.stats import pearsonr
@@ -50,7 +51,7 @@ BIBTEX = """@article{RAJALINGHAM2019493,
 
 
 class _Rajalingham2019(BenchmarkBase):
-    def __init__(self, identifier, metric):
+    def __init__(self, identifier, metric, num_sites=9):
         self._target_assembly = collect_assembly()
         self._training_stimuli = brainscore.get_stimulus_set('dicarlo.hvm')
         self._training_stimuli['image_label'] = self._training_stimuli['object_name']
@@ -66,6 +67,7 @@ class _Rajalingham2019(BenchmarkBase):
                              'perturbation_parameters': {'amount_microliter': 1,
                                                          'location': None}}
 
+        self._num_sites=num_sites
         self._metric = metric
         self._logger = logging.getLogger(fullname(self))
         super(_Rajalingham2019, self).__init__(
@@ -94,7 +96,8 @@ class _Rajalingham2019(BenchmarkBase):
         # "We varied the location of microinjections to randomly sample the ventral surface of IT
         # (from approximately + 8mm AP to approx + 20mm AP)."
         # stay between [0, 10] since that is the extent of the tissue
-        injection_locations = self.sample_grid_points([2, 2], [8, 8], num_x=4, num_y=4)
+        # injection_locations = self.sample_grid_points([2, 2], [8, 8], num_x=4, num_y=4)
+        injection_locations = self.sample_points([2, 2], [8, 8], num=self._num_sites)
         for site, injection_location in enumerate(injection_locations):
             perturbation = self.perturbation
             perturbation['perturbation_parameters']['location'] = injection_location
@@ -156,13 +159,23 @@ class _Rajalingham2019(BenchmarkBase):
                                      np.linspace(low[1], high[1], num_y))
         return np.stack((grid_x.flatten(), grid_y.flatten()), axis=1)  # , np.zeros(num_x * num_y) for empty z dimension
 
+    def sample_points(self, low, high, num):
+        assert len(low) == len(high) == 2
+        random_state = RandomState(0)
+        points_x = random_state.uniform(low=low[0], high=high[0], size=num)
+        points_y = random_state.uniform(low=low[1], high=high[1], size=num)
+        return np.stack((points_x, points_y), axis=1)
 
-def Rajalingham2019():
+
+def Rajalingham2019DeficitPrediction():
     metric = BehaviorDifferences()
-    return _Rajalingham2019(identifier='dicarlo.Rajalingham2019-deficit_statistics', metric=metric)
+    return _Rajalingham2019(identifier='dicarlo.Rajalingham2019-deficit_prediction',
+                            # num_sites=100,
+                            num_sites=3,
+                            metric=metric)
 
 
-def DicarloRajalingham2019SpatialDeficits():
+def Rajalingham2019SpatialDeficits():
     metric = SpatialCharacterizationMetric()
     return _Rajalingham2019(identifier='dicarlo.Rajalingham2019.IT-spatial_deficit_similarity', metric=metric)
 

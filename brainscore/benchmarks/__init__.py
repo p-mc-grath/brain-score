@@ -193,9 +193,9 @@ def _experimental_benchmark_pool():
     pool['dicarlo.SanghaviMurty2020.IT-pls'] = LazyLoad(DicarloSanghaviMurty2020ITPLS)
     from .rajalingham2020 import DicarloRajalingham2020ITPLS
     pool['dicarlo.Rajalingham2020.IT-pls'] = LazyLoad(DicarloRajalingham2020ITPLS)
-    from brainscore.benchmarks.rajalingham2019 import Rajalingham2019, DicarloRajalingham2019SpatialDeficits
-    pool['dicarlo.Rajalingham2019-deficits'] = LazyLoad(Rajalingham2019)
-    pool['dicarlo.Rajalingham2019-spatial_deficit_similarity'] = LazyLoad(DicarloRajalingham2019SpatialDeficits)
+    from brainscore.benchmarks.rajalingham2019 import Rajalingham2019DeficitPrediction, Rajalingham2019SpatialDeficits
+    pool['dicarlo.Rajalingham2019-deficit_prediction'] = LazyLoad(Rajalingham2019DeficitPrediction)
+    pool['dicarlo.Rajalingham2019-spatial_deficit_similarity'] = LazyLoad(Rajalingham2019SpatialDeficits)
     from brainscore.benchmarks.afraz2006 import Afraz2006
     pool['esteky.Afraz2006-face_dependent_shift'] = LazyLoad(Afraz2006)
     from brainscore.benchmarks.afraz2015 import Afraz2015MuscimolDeltaAccuracy, Afraz2015OptogeneticAccuracy, \
