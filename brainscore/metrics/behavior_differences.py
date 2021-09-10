@@ -8,7 +8,9 @@ from tqdm import tqdm
 from brainio.assemblies import merge_data_arrays, walk_coords, array_is_element, DataAssembly
 from brainscore.metrics import Metric, Score
 from brainscore.metrics.image_level_behavior import _o2
+from brainscore.metrics.regression import pls_regression, ridge_regression
 from brainscore.metrics.transformations import TestOnlyCrossValidationSingle, CrossValidation
+from brainscore.metrics.xarray_utils import XarrayRegression
 from brainscore.utils import fullname
 
 
@@ -91,6 +93,7 @@ class BehaviorDifferences(Metric):
         # try to predict from model
         task_split = CrossValidation(split_coord='task_number', stratification_coord=None,
                                      kfold=True, splits=len(site_target_assembly['task']))
+                                     # kfold=True, splits=int(len(site_target_assembly['task']) / 2))
         task_scores = task_split(source_assembly, site_target_assembly, apply=self.apply_task)
         task_scores = task_scores.raw
         correlation, p = pearsonr(task_scores.sel(type='source'), task_scores.sel(type='target'))
@@ -110,20 +113,39 @@ class BehaviorDifferences(Metric):
         """
         # deal with xarray bug
         source_train, source_test = deal_with_xarray_bug(source_train), deal_with_xarray_bug(source_test)
-        # map: find site in assembly1 that best matches mapping tasks
-        correlations = {}
-        for site in source_train['site'].values:
-            source_site = source_train.sel(site=site)
-            np.testing.assert_array_equal(source_site['task'].values, target_train['task'].values)
-            correlation, p = pearsonr(source_site, target_train)
-            correlations[site] = correlation
-        best_site = [site for site, correlation in correlations.items() if correlation == max(correlations.values())]
-        best_site = best_site[0]  # choose first one if there are multiple
-        # test: predictivity of held-out task.
+
+        # # map: find site in assembly1 that best matches mapping tasks
+        # correlations = {}
+        # for site in source_train['site'].values:
+        #     source_site = source_train.sel(site=site)
+        #     np.testing.assert_array_equal(source_site['task'].values, target_train['task'].values)
+        #     correlation, p = pearsonr(source_site, target_train)
+        #     correlations[site] = correlation
+        # best_site = [site for site, correlation in correlations.items() if correlation == max(correlations.values())]
+        # best_site = best_site[0]  # choose first one if there are multiple
+
+        # # test: predictivity of held-out task.
+        # # We can only collect the single prediction here and then correlate in outside loop
+        # source_test = source_test.sel(site=best_site)
+        # np.testing.assert_array_equal(source_test['task'].values, target_test['task'].values)
+        # pair = type(target_test)([source_test.values[0], target_test.values[0]],
+        #                          coords={  # 'task': source_test['task'].values,
+        #                              'type': ['source', 'target']},
+        #                          dims=['type'])  # , 'task'
+
+        # map: regress from source to target
+        regression = ridge_regression(xarray_kwargs=dict(expected_dims=('task', 'site'),
+                                                         neuroid_dim='site',
+                                                         neuroid_coord='site_iteration',
+                                                         stimulus_coord='task'))
+        target_train = target_train.expand_dims('site')
+        target_train['site_iteration'] = 'site', [0]
+        regression.fit(source_train, target_train)
+        # test: predictivity of held-out task
         # We can only collect the single prediction here and then correlate in outside loop
-        source_test = source_test.sel(site=best_site)
-        np.testing.assert_array_equal(source_test['task'].values, target_test['task'].values)
-        pair = type(target_test)([source_test.values[0], target_test.values[0]],
+        prediction_test = regression.predict(source_test)
+        np.testing.assert_array_equal(prediction_test['task'].values, prediction_test['task'].values)
+        pair = type(target_test)([prediction_test.squeeze().values, target_test.squeeze().values],
                                  coords={  # 'task': source_test['task'].values,
                                      'type': ['source', 'target']},
                                  dims=['type'])  # , 'task'
