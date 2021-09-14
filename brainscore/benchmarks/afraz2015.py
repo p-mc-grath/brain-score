@@ -32,6 +32,15 @@ BIBTEX = """@article {Afraz6730,
             journal = {Proceedings of the National Academy of Sciences}
         }"""
 
+# TODO
+OPTOGENETIC_PARAMETERS = {}
+MUSCIMOL_PARAMETERS = {
+    # "1 μL of muscimol (5 mg/mL) was injected at 0.1 μL/min rate"
+    'amount_microliter': 1,
+    'mg_per_ml': 5,
+    'rate_µl_per_min': 0.1
+}
+
 
 class Afraz2015OptogeneticSelectiveDeltaAccuracy(BenchmarkBase):
     def __init__(self):
@@ -73,10 +82,7 @@ class Afraz2015OptogeneticSelectiveDeltaAccuracy(BenchmarkBase):
             self._logger.debug(f"Suppressing at {location}")
             candidate.perturb(perturbation=BrainModel.Perturbation.optogenetic_suppression,
                               target='IT', perturbation_parameters={
-                    # TODO
-                    'location': location,
-                    'amount_microliter': 1,  # FIXME
-                })
+                    **{'location': location}, **OPTOGENETIC_PARAMETERS})
             behavior = candidate.look_at(self._assembly.stimulus_set)
             behavior = behavior.expand_dims('site')
             behavior['site_iteration'] = 'site', [site]
@@ -138,8 +144,7 @@ class Afraz2015OptogeneticAccuracy(BenchmarkBase):
             self._logger.debug(f"Suppressing at {location}")
             candidate.perturb(perturbation=BrainModel.Perturbation.optogenetic_suppression,
                               target='IT', perturbation_parameters={
-                    'location': location,
-                })
+                    **{'location': location}, **OPTOGENETIC_PARAMETERS})
             behavior = candidate.look_at(self._assembly.stimulus_set)
             behavior = behavior.expand_dims('site')
             behavior['site_iteration'] = 'site', [site]
@@ -272,12 +277,7 @@ class Afraz2015MuscimolDeltaAccuracy(BenchmarkBase):
             self._logger.debug(f"Injecting at {location}")
             candidate.perturb(perturbation=BrainModel.Perturbation.muscimol,
                               target='IT', perturbation_parameters={
-                    # "1 μL of muscimol (5 mg/mL) was injected at 0.1 μL/min rate"
-                    'amount_microliter': 1,
-                    'mg_per_ml': 5,
-                    'rate_µl_per_min': 0.1,
-                    'location': location,
-                })
+                    **{'location': location}, **MUSCIMOL_PARAMETERS})
             behavior = candidate.look_at(self._assembly.stimulus_set)
             behavior = behavior.expand_dims('site')
             behavior['site_iteration'] = 'site', [site]
