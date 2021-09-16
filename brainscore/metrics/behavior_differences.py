@@ -1,6 +1,5 @@
 import itertools
 import logging
-
 import numpy as np
 from scipy.stats import pearsonr
 from tqdm import tqdm
@@ -8,9 +7,8 @@ from tqdm import tqdm
 from brainio.assemblies import merge_data_arrays, walk_coords, array_is_element, DataAssembly
 from brainscore.metrics import Metric, Score
 from brainscore.metrics.image_level_behavior import _o2
-from brainscore.metrics.regression import pls_regression, ridge_regression
+from brainscore.metrics.regression import linear_regression
 from brainscore.metrics.transformations import TestOnlyCrossValidationSingle, CrossValidation
-from brainscore.metrics.xarray_utils import XarrayRegression
 from brainscore.utils import fullname
 
 
@@ -37,8 +35,19 @@ class BehaviorDifferences(Metric):
         # compare
         site_split = TestOnlyCrossValidationSingle(  # instantiate on-the-fly to control the kfolds for 1 test site each
             split_coord='site_iteration', stratification_coord=None, kfold=True, splits=len(assembly2['site']))
-        score = site_split(assembly2_differences,
-                           apply=lambda site_assembly: self.apply_site(assembly1_differences, site_assembly))
+        task_scores = site_split(assembly2_differences,
+                                 apply=lambda site_assembly: self.apply_site(assembly1_differences, site_assembly))
+        task_scores = task_scores.raw
+        source = task_scores.sel(type='source')
+        target = task_scores.sel(type='target')
+        source = source.stack(splits=['split', 'task_split'])
+        target = target.stack(splits=['split', 'task_split'])
+        not_nan = ~np.isnan(target)  # not every task is part of every split
+        source, target = source[not_nan], target[not_nan]
+        correlation, p = pearsonr(source, target)
+        score = Score([correlation, p], coords={'statistic': ['r', 'p']}, dims=['statistic'])
+        score.attrs['predictions'] = task_scores.sel(type='source')
+        score.attrs['target'] = task_scores.sel(type='target')
         return score
 
     def characterize(self, assembly):
@@ -93,14 +102,11 @@ class BehaviorDifferences(Metric):
         # try to predict from model
         task_split = CrossValidation(split_coord='task_number', stratification_coord=None,
                                      kfold=True, splits=len(site_target_assembly['task']))
-                                     # kfold=True, splits=int(len(site_target_assembly['task']) / 2))
+        # kfold=True, splits=int(len(site_target_assembly['task']) / 2))
         task_scores = task_split(source_assembly, site_target_assembly, apply=self.apply_task)
         task_scores = task_scores.raw
-        correlation, p = pearsonr(task_scores.sel(type='source'), task_scores.sel(type='target'))
-        score = Score([correlation, p], coords={'statistic': ['r', 'p']}, dims=['statistic'])
-        score.attrs['predictions'] = task_scores.sel(type='source')
-        score.attrs['target'] = task_scores.sel(type='target')
-        return score
+        task_scores = task_scores.rename({'split': 'task_split'})
+        return task_scores
 
     def apply_task(self, source_train, target_train, source_test, target_test):
         """
@@ -134,10 +140,11 @@ class BehaviorDifferences(Metric):
         #                          dims=['type'])  # , 'task'
 
         # map: regress from source to target
-        regression = ridge_regression(xarray_kwargs=dict(expected_dims=('task', 'site'),
-                                                         neuroid_dim='site',
-                                                         neuroid_coord='site_iteration',
-                                                         stimulus_coord='task'))
+        regression = linear_regression(
+            xarray_kwargs=dict(expected_dims=('task', 'site'),
+                               neuroid_dim='site',
+                               neuroid_coord='site_iteration',
+                               stimulus_coord='task'))
         target_train = target_train.expand_dims('site')
         target_train['site_iteration'] = 'site', [0]
         regression.fit(source_train, target_train)
