@@ -8,7 +8,6 @@ from brainio.assemblies import merge_data_arrays, walk_coords, array_is_element,
 from brainscore.metrics import Metric, Score
 from brainscore.metrics.image_level_behavior import _o2
 from brainscore.metrics.regression import linear_regression
-from brainscore.metrics.transformations import TestOnlyCrossValidationSingle, CrossValidation
 from brainscore.utils import fullname
 
 
@@ -33,15 +32,56 @@ class BehaviorDifferences(Metric):
         assembly2_differences = assembly2_differences.mean('bootstrap')
 
         # compare
-        site_split = TestOnlyCrossValidationSingle(  # instantiate on-the-fly to control the kfolds for 1 test site each
-            split_coord='site_iteration', stratification_coord=None, kfold=True, splits=len(assembly2['site']))
-        task_scores = site_split(assembly2_differences,
-                                 apply=lambda site_assembly: self.apply_site(assembly1_differences, site_assembly))
-        task_scores = task_scores.raw
-        # at this point, both `split` and `site` make the same distinction. Get rid of the unnecessary `split` dimension
-        task_scores = task_scores.mean('split')
-        source = task_scores.sel(type='source')
-        target = task_scores.sel(type='target')
+        sites = assembly2_differences['site_iteration'].values
+        tasks = assembly2_differences['task_number'].values
+        prediction_pairs = []
+        for target_test_site, target_test_task in tqdm(
+                itertools.product(sites, tasks), desc='site+task kfold', total=len(sites) * len(tasks)):
+            # test assembly is 1 task, 1 site
+            target_test = assembly2_differences[{
+                'site': [site == target_test_site for site in assembly2_differences['site_iteration'].values],
+                'task': [task == target_test_task for task in assembly2_differences['task_number'].values]}]
+            if len(target_test) < 1:
+                continue  # not all tasks were run on all sites
+            # train are the other tasks on the same site
+            target_train = assembly2_differences[{
+                'site': [site == target_test_site for site in assembly2_differences['site_iteration'].values],
+                'task': [task != target_test_task for task in assembly2_differences['task_number'].values]}]
+            # source test assembly is same 1 task, all sites
+            source_test = assembly1_differences[{
+                'task': [task == target_test_task for task in assembly1_differences['task_number'].values]}]
+            # source train assembly are other tasks, all sites
+            source_train = assembly1_differences[{
+                'task': [task != target_test_task for task in assembly1_differences['task_number'].values]}]
+
+            # filter non-nan task measurements from target
+            nonnan_tasks = target_train['task'][~target_train.squeeze('site').isnull()].values
+            target_train = target_train.sel(task=nonnan_tasks)
+            source_train = source_train.sel(task=nonnan_tasks)
+
+            # map: regress from source to target
+            regression = linear_regression(
+                xarray_kwargs=dict(expected_dims=('task', 'site'),
+                                   neuroid_dim='site',
+                                   neuroid_coord='site_iteration',
+                                   stimulus_coord='task'))
+            regression.fit(source_train, target_train)
+            # test: predictivity of held-out task
+            # We can only collect the single prediction here and then correlate in outside loop
+            prediction_test = regression.predict(source_test)
+            np.testing.assert_array_equal(prediction_test['task'].values, prediction_test['task'].values)
+            np.testing.assert_array_equal(prediction_test.shape, target_test.shape)
+            pair = type(target_test)([prediction_test, target_test],
+                                     coords={**{'type': ['source', 'target']},
+                                             **{coord: (dims, values) for coord, dims, values in
+                                                walk_coords(target_test)}},
+                                     dims=('type',) + target_test.dims)
+            prediction_pairs.append(pair)
+
+        prediction_pairs = merge_data_arrays(prediction_pairs)
+
+        source = prediction_pairs.sel(type='source')
+        target = prediction_pairs.sel(type='target')
         source_vector = source.values.flatten()
         target_vector = target.values.flatten()
         not_nan = ~np.isnan(target_vector)  # not every task is part of every site split
@@ -84,59 +124,6 @@ class BehaviorDifferences(Metric):
          }, dims=['task'] + [dim for dim in assembly.dims if
                              dim not in ['task_left', 'task_right']])
         return task_values
-
-    def apply_site(self, source_assembly, site_target_assembly):
-        np.testing.assert_array_equal(source_assembly.sortby('task_number')['task_left'].values,
-                                      site_target_assembly.sortby('task_number')['task_left'].values)
-        np.testing.assert_array_equal(source_assembly.sortby('task_number')['task_right'].values,
-                                      site_target_assembly.sortby('task_number')['task_right'].values)
-
-        # filter non-nan task measurements from target
-        nonnan_tasks = site_target_assembly['task'][~site_target_assembly.squeeze('site').isnull()]
-        if len(nonnan_tasks) < len(site_target_assembly):
-            self._logger.warning(
-                f"Ignoring tasks {site_target_assembly['task'][~site_target_assembly.isnull()].values}")
-        site_target_assembly = site_target_assembly.sel(task=nonnan_tasks.values)
-        source_assembly = source_assembly.sel(task=nonnan_tasks.values)
-
-        # try to predict from model
-        task_split = CrossValidation(split_coord='task_number', stratification_coord=None,
-                                     kfold=True, splits=len(site_target_assembly['task']))
-        task_scores = task_split(source_assembly, site_target_assembly, apply=self.apply_task)
-        task_scores = task_scores.raw
-        # at this point, both `split` and `task` make the same distinction. Get rid of the unnecessary `split` dimension
-        task_scores = task_scores.mean('split')
-        return task_scores
-
-    def apply_task(self, source_train, target_train, source_test, target_test):
-        """
-        finds the best-matching site in the source train assembly to predict the task effects in the test target.
-        :param source_train: source assembly for mapping with t tasks and n sites
-        :param target_train: target assembly for mapping with t tasks
-        :param source_test: source assembly for testing with 1 task and n sites
-        :param target_test: target assembly for testing with 1 task
-        :return: a pair
-        """
-        # deal with xarray bug
-        source_train, source_test = deal_with_xarray_bug(source_train), deal_with_xarray_bug(source_test)
-
-        # map: regress from source to target
-        regression = linear_regression(
-            xarray_kwargs=dict(expected_dims=('task', 'site'),
-                               neuroid_dim='site',
-                               neuroid_coord='site_iteration',
-                               stimulus_coord='task'))
-        regression.fit(source_train, target_train)
-        # test: predictivity of held-out task
-        # We can only collect the single prediction here and then correlate in outside loop
-        prediction_test = regression.predict(source_test)
-        np.testing.assert_array_equal(prediction_test['task'].values, prediction_test['task'].values)
-        np.testing.assert_array_equal(prediction_test.shape, target_test.shape)
-        pair = type(target_test)([prediction_test, target_test],
-                                 coords={**{'type': ['source', 'target']},
-                                         **{coord: (dims, values) for coord, dims, values in walk_coords(target_test)}},
-                                 dims=('type',) + target_test.dims)
-        return pair
 
     def compute_differences(self, behaviors):
         """
