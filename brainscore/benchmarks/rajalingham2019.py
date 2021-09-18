@@ -13,7 +13,7 @@ import brainscore
 from brainio.assemblies import merge_data_arrays, walk_coords, DataAssembly, array_is_element
 from brainscore.benchmarks import BenchmarkBase
 from brainscore.metrics import Score
-from brainscore.metrics.behavior_differences import BehaviorDifferences
+from brainscore.metrics.behavior_differences import DeficitPredictionTask, DeficitPredictionObject
 from brainscore.metrics.image_level_behavior import _o2
 from brainscore.metrics.significant_match import SignificantCorrelation
 from brainscore.metrics.transformations import CrossValidation
@@ -67,7 +67,7 @@ class _Rajalingham2019(BenchmarkBase):
                              'perturbation_parameters': {'amount_microliter': 1,
                                                          'location': None}}
 
-        self._num_sites=num_sites
+        self._num_sites = num_sites
         self._metric = metric
         self._logger = logging.getLogger(fullname(self))
         super(_Rajalingham2019, self).__init__(
@@ -167,11 +167,17 @@ class _Rajalingham2019(BenchmarkBase):
         return np.stack((points_x, points_y), axis=1)
 
 
-def Rajalingham2019DeficitPrediction():
-    metric = BehaviorDifferences()
-    return _Rajalingham2019(identifier='dicarlo.Rajalingham2019-deficit_prediction',
-                            # num_sites=100,
-                            num_sites=3,
+def Rajalingham2019DeficitPredictionTask():
+    metric = DeficitPredictionTask()
+    return _Rajalingham2019(identifier='dicarlo.Rajalingham2019-deficit_prediction_task',
+                            # num_sites=100,  # TODO
+                            metric=metric)
+
+
+def Rajalingham2019DeficitPredictionObject():
+    metric = DeficitPredictionObject()
+    return _Rajalingham2019(identifier='dicarlo.Rajalingham2019-deficit_prediction_object',
+                            # num_sites=100,  # TODO
                             metric=metric)
 
 
