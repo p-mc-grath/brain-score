@@ -49,6 +49,13 @@ BIBTEX = """@article{RAJALINGHAM2019493,
                 abstract = {Extensive research suggests that the inferior temporal (IT) population supports visual object recognition behavior. However, causal evidence for this hypothesis has been equivocal, particularly beyond the specific case of face-selective subregions of IT. Here, we directly tested this hypothesis by pharmacologically inactivating individual, millimeter-scale subregions of IT while monkeys performed several core object recognition subtasks, interleaved trial-by trial. First, we observed that IT inactivation resulted in reliable contralateral-biased subtask-selective behavioral deficits. Moreover, inactivating different IT subregions resulted in different patterns of subtask deficits, predicted by each subregion’s neuronal object discriminability. Finally, the similarity between different inactivation effects was tightly related to the anatomical distance between corresponding inactivation sites. Taken together, these results provide direct evidence that the IT cortex causally supports general core object recognition and that the underlying IT coding dimensions are topographically organized.}
                 }"""
 
+# "Each inactivation session began with a single focal microinjection of 1ml of muscimol
+# (5mg/mL, Sigma Aldrich) at a slow rate (100nl/min) via a 30-gauge stainless-steel cannula at
+# the targeted site in ventral IT."
+PERTURBATION_PARAMETERS = {
+    'amount_microliter': 1
+}
+
 
 class _Rajalingham2019(BenchmarkBase):
     def __init__(self, identifier, metric, num_sites=9):
@@ -59,13 +66,6 @@ class _Rajalingham2019(BenchmarkBase):
         self._training_stimuli = self._training_stimuli[self._training_stimuli['object_name'].isin(
             self._target_assembly.stimulus_set['object_name'])]
         self._test_stimuli = self._target_assembly.stimulus_set
-        # "Each inactivation session began with a single focal microinjection of 1ml of muscimol
-        # (5mg/mL, Sigma Aldrich) at a slow rate (100nl/min) via a 30-gauge stainless-steel cannula at
-        # the targeted site in ventral IT."
-        self.perturbation = {'type': BrainModel.Perturbation.muscimol,
-                             'target': 'IT',
-                             'perturbation_parameters': {'amount_microliter': 1,
-                                                         'location': None}}
 
         self._num_sites = num_sites
         self._metric = metric
@@ -89,21 +89,20 @@ class _Rajalingham2019(BenchmarkBase):
         # and the recovery or post-control session (2 days after injection)"
         # --> we here front-load one control session and then run many inactivation sessions
         # control
-        unperturbed_behavior = self.perform_task(candidate, perturbation=None)
+        unperturbed_behavior = self._perform_task_unperturbed(candidate)
 
         # silencing sessions
         behaviors = [unperturbed_behavior]
         # "We varied the location of microinjections to randomly sample the ventral surface of IT
         # (from approximately + 8mm AP to approx + 20mm AP)."
         # stay between [0, 10] since that is the extent of the tissue
-        # injection_locations = self.sample_grid_points([2, 2], [8, 8], num_x=4, num_y=4)
         injection_locations = self.sample_points([2, 2], [8, 8], num=self._num_sites)
         for site, injection_location in enumerate(injection_locations):
-            perturbation = self.perturbation
-            perturbation['perturbation_parameters']['location'] = injection_location
-            perturbation['site_number'] = site
-
-            perturbed_behavior = self.perform_task(candidate, perturbation=perturbation)
+            perturbation_parameters = {**PERTURBATION_PARAMETERS,
+                                       **{'location': injection_location}}
+            perturbed_behavior = self._perform_task_perturbed(candidate,
+                                                              perturbation_parameters=perturbation_parameters,
+                                                              site_number=site)
             behaviors.append(perturbed_behavior)
 
         behaviors = merge_data_arrays(behaviors)
@@ -111,12 +110,6 @@ class _Rajalingham2019(BenchmarkBase):
 
         score = self._metric(behaviors, self._target_assembly)
         return score
-
-    def perform_task(self, candidate: BrainModel, perturbation):
-        if perturbation is None:
-            return self._perform_task_unperturbed(candidate)
-        else:
-            return self._perform_task_perturbed(candidate, perturbation)
 
     def _perform_task_unperturbed(self, candidate: BrainModel):
         candidate.perturb(perturbation=None, target='IT')  # reset
@@ -126,19 +119,19 @@ class _Rajalingham2019(BenchmarkBase):
 
         return behavior
 
-    def _perform_task_perturbed(self, candidate: BrainModel, perturbation):
+    def _perform_task_perturbed(self, candidate: BrainModel, perturbation_parameters, site_number):
         candidate.perturb(perturbation=None, target='IT')  # reset
-        candidate.perturb(perturbation=perturbation['type'],
-                          target=perturbation['target'],
-                          perturbation_parameters=perturbation['perturbation_parameters'])
+        candidate.perturb(perturbation=BrainModel.Perturbation.muscimol,
+                          target='IT',
+                          perturbation_parameters=perturbation_parameters)
         behavior = candidate.look_at(self._test_stimuli)
 
         behavior = behavior.expand_dims('injected').expand_dims('site')
         behavior['injected'] = [True]
-        behavior['site_iteration'] = 'site', [perturbation['site_number']]
-        behavior['site_x'] = 'site', [perturbation['perturbation_parameters']['location'][0]]
-        behavior['site_y'] = 'site', [perturbation['perturbation_parameters']['location'][1]]
-        behavior['site_z'] = 'site', [0]  # [perturbation['perturbation_parameters']['location'][2]]
+        behavior['site_iteration'] = 'site', [site_number]
+        behavior['site_x'] = 'site', [perturbation_parameters[0]]
+        behavior['site_y'] = 'site', [perturbation_parameters[1]]
+        behavior['site_z'] = 'site', [0]
         behavior = type(behavior)(behavior)  # make sure site and injected are indexed
 
         return behavior
