@@ -129,8 +129,8 @@ class _Rajalingham2019(BenchmarkBase):
         behavior = behavior.expand_dims('injected').expand_dims('site')
         behavior['injected'] = [True]
         behavior['site_iteration'] = 'site', [site_number]
-        behavior['site_x'] = 'site', [perturbation_parameters[0]]
-        behavior['site_y'] = 'site', [perturbation_parameters[1]]
+        behavior['site_x'] = 'site', [perturbation_parameters['location'][0]]
+        behavior['site_y'] = 'site', [perturbation_parameters['location'][1]]
         behavior['site_z'] = 'site', [0]
         behavior = type(behavior)(behavior)  # make sure site and injected are indexed
 
