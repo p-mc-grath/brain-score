@@ -250,6 +250,7 @@ class Afraz2015MuscimolDeltaAccuracy(BenchmarkBase):
         # face-selective units (defined as FD d′ > 1)."
 
         # record to determine face-selectivity
+        candidate.start_task(BrainModel.Task.passive)  # passive viewing
         candidate.start_recording('IT', time_bins=[(50, 100)])
         recordings = candidate.look_at(self._selectivity_stimuli)
 
@@ -279,6 +280,7 @@ class Afraz2015MuscimolDeltaAccuracy(BenchmarkBase):
                               target='IT', perturbation_parameters={
                     **{'location': location}, **MUSCIMOL_PARAMETERS})
             behavior = candidate.look_at(self._assembly.stimulus_set)
+            candidate.perturb(perturbation=None, target='IT')  # reset
             behavior = behavior.expand_dims('site')
             behavior['site_iteration'] = 'site', [site]
             behavior['site_x'] = 'site', [location[0]]
@@ -313,7 +315,9 @@ class Afraz2015MuscimolDeltaAccuracy(BenchmarkBase):
         different = is_significantly_different(delta_accuracies, between='is_face_selective')
         negative_effect = delta_accuracies.sel(is_face_selective=True).mean() < 0
         score = different and negative_effect
-        return Score([score], coords={'aggregation': ['center']}, dims=['aggregation'])
+        score = Score([score], coords={'aggregation': ['center']}, dims=['aggregation'])
+        score.attrs['delta_accuracies'] = delta_accuracies
+        return score
 
 
 def is_significantly_different(assembly, between, significance_threshold=0.05):

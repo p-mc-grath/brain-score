@@ -53,14 +53,15 @@ class BrainModel:
         """
         raise NotImplementedError()
 
-    def start_task(self, task: Task, fitting_stimuli):
+    def start_task(self, task: Task, fitting_stimuli=None):
         """
         Instructs the model to begin one of the tasks specified in :data:`~brainscore.model_interface.BrainModel.Task`.
         For all followings call of :meth:`~brainscore.model_interface.BrainModel.look_at`, the model returns the
         expected outputs for the specified task.
 
         :param task: The task the model should perform, and thus which outputs it should return
-        :param fitting_stimuli: A set of stimuli for the model to learn on, e.g. image-label pairs
+        :param fitting_stimuli: A set of stimuli for the model to learn on, e.g. image-label pairs.
+                                None when the task is passive viewing.
         """
         raise NotImplementedError()
 
