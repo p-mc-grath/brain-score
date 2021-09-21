@@ -58,7 +58,7 @@ PERTURBATION_PARAMETERS = {
 
 
 class _Rajalingham2019(BenchmarkBase):
-    def __init__(self, identifier, metric, num_sites=9):
+    def __init__(self, identifier, metric, ceiling_func=None, num_sites=9):
         self._target_assembly = collect_assembly()
         self._training_stimuli = brainscore.get_stimulus_set('dicarlo.hvm')
         self._training_stimuli['image_label'] = self._training_stimuli['object_name']
@@ -72,7 +72,7 @@ class _Rajalingham2019(BenchmarkBase):
         self._logger = logging.getLogger(fullname(self))
         super(_Rajalingham2019, self).__init__(
             identifier=identifier,
-            ceiling_func=None,
+            ceiling_func=ceiling_func,
             version=1, parent='IT',
             bibtex=BIBTEX)
 
@@ -164,7 +164,9 @@ def Rajalingham2019DeficitPredictionTask():
     metric = DeficitPredictionTask()
     return _Rajalingham2019(identifier='dicarlo.Rajalingham2019-deficit_prediction_task',
                             # num_sites=100,  # TODO
-                            metric=metric)
+                            metric=metric,
+                            ceiling_func=None,  # TODO
+                            )
 
 
 def Rajalingham2019DeficitPredictionObject():
