@@ -26,6 +26,15 @@ class BrainModel:
     task to perform
     """
 
+    @property
+    def identifier(self) -> str:
+        """
+        The unique identifier for this model.
+
+        :return: e.g. `'CORnet-S'`, or `'alexnet'`
+        """
+        raise NotImplementedError()
+
     Perturbation = Enum('Perturbation', " ".join(['muscimol', 'microstimulation', 'optogenetic_suppression']))
     """
     perturbation types
