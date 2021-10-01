@@ -32,13 +32,22 @@ BIBTEX = """@article {Afraz6730,
             journal = {Proceedings of the National Academy of Sciences}
         }"""
 
-# TODO
-OPTOGENETIC_PARAMETERS = {}
+OPTOGENETIC_PARAMETERS = {
+    # "The targeted cortex was injected with ∼6 μLof solution (at 0.1 μL/min rate)"
+    "amount_microliter": 6,
+    "rate_microliter_per_min": 0.1,
+    # "containing AAV-8 carrying CAG-ARCHT (5)"
+    "virus": "AAV-8_CAG-ARCHT",
+    # "Viral titer was ∼2 × 10^12 infectious units per mL"
+    "infectious_units_per_ml": 2E12,
+    # 200-ms-duration laser pulse
+    "laser_pulse_duration_ms": 200,
+}
 MUSCIMOL_PARAMETERS = {
     # "1 μL of muscimol (5 mg/mL) was injected at 0.1 μL/min rate"
     'amount_microliter': 1,
-    'mg_per_ml': 5,
-    'rate_µl_per_min': 0.1
+    'mg_per_microliter': 5,
+    'rate_microliter_per_min': 0.1,
 }
 
 
@@ -192,7 +201,9 @@ class Afraz2015OptogeneticAccuracy(BenchmarkBase):
         site_accuracies = grouped_accuracy.sel(laser_on=True).mean()  # mean over everything at once
         unperturbed_accuracy_higher = unperturbed_accuracy > site_accuracies
         score = different and unperturbed_accuracy_higher
-        return Score([score], coords={'aggregation': ['center']}, dims=['aggregation'])
+        score = Score([score], coords={'aggregation': ['center']}, dims=['aggregation'])
+        score.attrs['delta_accuracy'] = unperturbed_accuracy - site_accuracies
+        return score
 
     def site_accuracies(self, unperturbed_behavior, perturbed_behaviors):
         unperturbed_accuracy = per_image_accuracy(unperturbed_behavior)
@@ -430,4 +441,8 @@ def load_stimuli():
     selectivity_stimuli = stimuli[stimuli['category'].isin(['object', 'face'])]
     gender_stimuli['image_label'] = gender_stimuli['category']
     test_stimuli = gender_stimuli.sample(n=60, random_state=1)
+
+    gender_stimuli.identifier = stimuli.identifier + '-gender'
+    selectivity_stimuli.identifier = stimuli.identifier + '-selectivity'
+    test_stimuli.identifier = stimuli.identifier + '-test'
     return gender_stimuli, selectivity_stimuli, test_stimuli
