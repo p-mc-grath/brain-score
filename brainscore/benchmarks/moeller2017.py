@@ -1,4 +1,5 @@
 from brainscore.utils import LazyLoad
+from tqdm import tqdm
 from xarray import DataArray
 import numpy as np
 import pandas as pd
@@ -21,6 +22,15 @@ BIBTEX = '''@article{article,
             journal = {Nature Neuroscience},
             doi = {10.1038/nn.4527}
             }'''
+
+STIMULATION_PARAMETERS = {
+    'type': [None, BrainModel.Perturbation.microstimulation, BrainModel.Perturbation.microstimulation]
+    'current_pulse_mA': [0, 100, 300],
+    'pulse_rate_Hz': 150,
+    'pulse_duration_ms': 0.2,
+    'pulse_interval_ms': 0.1,
+    'stimulation_duration_ms': 200
+}
 
 
 class _Moeller2017(BenchmarkBase):
@@ -52,26 +62,15 @@ class _Moeller2017(BenchmarkBase):
             version=1, parent='IT',
             bibtex=BIBTEX)
 
-        self._stimulus_class = stimulus_class
-        self._perturbation_location = perturbation_location
-        self._perturbations = [{'type': None,
-                                'perturbation_parameters': {'current_pulse_mA': 0}},
-                               {'type': BrainModel.Perturbation.microstimulation,
-                                'perturbation_parameters': {'current_pulse_mA': 100,
-                                                            'stimulation_duration_ms': 200,
-                                                            'pulse_rate_Hz': 150,
-                                                            'location': LazyLoad(self._perturbation_coordinates)}},
-                               {'type': BrainModel.Perturbation.microstimulation,
-                                'perturbation_parameters': {'current_pulse_mA': 300,
-                                                            'stimulation_duration_ms': 200,
-                                                            'pulse_rate_Hz': 150,
-                                                            'location': LazyLoad(self._perturbation_coordinates)}}]
-
         self._metric = metric()
         self._performance_measure = performance_measure()
+        self._perturbations = self._set_up_perturbations(perturbation_location)
+        self._stimulus_class = stimulus_class
+
         self._target_assembly = self._collect_target_assembly()
         self._stimulus_set = self._target_assembly.stimulus_set
-        self._training_assembly = self._collect_train_assembly()
+        self._stimulus_set_FP = self._target_assembly.stimulus_set_FP
+        self._stimulus_set_training = self._target_assembly.stimulus_set_training
 
         self._seed = 123
 
@@ -84,8 +83,8 @@ class _Moeller2017(BenchmarkBase):
                  Score.performance = performance aggregated per experiment
                  Score.raw_performance = performance per category
         '''
-        self._perturbation_coordinates = self._compute_perturbation_coordinates(candidate)
-        self._decoder = self._get_decoder(candidate)
+        self._compute_perturbation_coordinates(candidate)
+        self._set_up_decoder(candidate)
 
         candidate.start_recording(recording_target='IT', time_bins=[(70, 170)])
         candidate_performance = []
@@ -117,30 +116,12 @@ class _Moeller2017(BenchmarkBase):
         behavior = self._add_perturbation_info(behavior, perturbation)
         return behavior
 
-    def _compute_perturbation_coordinates(self, candidate):
-        '''
-        TODO Compute stimulation site coordinates
-        :param candidate: BrainModel
-        :return (x, y) coordinates for perturbation according to self._perturbation_location
-        '''
-        face_selectivity_map = compute_face_selectivity(candidate)
-        patch = find_FP(face_selectivity_map)
-        if self._perturbation_location == 'within_facepatch':
-            # find middle
-            x, y = find_middle(patch)
-        elif self._perturbation_location == 'outside_facepatch':
-            # rand sample with certain distance
-            x, y = sample_outside(patch)
-        else:
-            raise KeyError
-
-        return (x, y)
-
     def _compute_behavior(self, IT_recordings):
         '''
         TODO xarray rng compatibility
         TODO xarray indexing compatibility
         TODO xarray lin model compatibility
+        TODO actually sample vs. exhaustively run all conditions
         Compute behavior of given IT recordings in a identity matching task,
             i.e. given two images of the same category judge if they depict an object of same or different identity
         :param IT_recordings: DataArray:
@@ -158,7 +139,7 @@ class _Moeller2017(BenchmarkBase):
             rng = np.random.defaul_rng(seed=self._seed)
             number_of_samples = 1000
 
-            recording_pool_one = IT_recordings.sel(object_name=category)
+            recording_pool_one = IT_recordings.sel(object_name=object_name)
             recordings_image_one = rng.choice(recording_pool_one, number_of_samples)  # TODO
             if condition == 'same_id':
                 recordings_image_two = rng.choice(recording_pool_one, number_of_samples)
@@ -166,19 +147,19 @@ class _Moeller2017(BenchmarkBase):
                 recordings_image_one = recordings_image_one[not_same_recording]  # TODO
                 recordings_image_two = recordings_image_two[not_same_recording]  # TODO
             elif condition == 'different_id':
-                recording_pool_two = IT_recordings.where(IT_recordings.object_name != category, drop=True)
+                recording_pool_two = IT_recordings.where(IT_recordings.object_name != object_name, drop=True)
                 recordings_image_two = rng.choice(recording_pool_two, number_of_samples)
 
             return zip(recordings_image_one, recordings_image_two)
 
         behavior_data = []
-        for category in set(IT_recordings.object_name):
+        for object_name in set(IT_recordings.object_name):
             for condition in ['same_id', 'different_id']:
                 for recording_image_one, recording_image_two in _sample_recordings():
                     choice = self._decoder(recording_image_one, recording_image_two)  # TODO
-                    behavior_data.append((choice, condition, category))
+                    behavior_data.append((choice, condition, object_name))
 
-        behaviors = self._behavior_to_dataarray(behavior_data)
+        behaviors = self._list_to_dataarray(behavior_data, dimensions=['values', 'condition', 'object_name'])
         return behaviors
 
     def _compute_performance(self, behavior):
@@ -196,13 +177,61 @@ class _Moeller2017(BenchmarkBase):
                                                                          object_name=object_name))
                     performance_data.append((performance, object_name, condition, current_pulse_mA))
 
-        performances = self._performance_to_xarray(performance_data)
+        performances = self._list_to_dataarray(performance_data,
+                                               dimensions=['values', 'object_name', 'condition', 'current_pulse_mA'])
         return performances
+
+    def _compute_perturbation_coordinates(self, candidate):
+        '''
+        Save stimulation coordinates (x,y) to self._perturbation_coordinates
+        :param candidate: BrainModel
+        '''
+        candidate.start_recording('IT', time_bins=[(50, 100)])
+        recordings = candidate.look_at(self._stimulus_set_FP)  # vs _training_assembly
+
+        # 1 smooth spatial pattern by smoothing activity with gaussian kernel 1mm
+        # 2 voxelize
+        recordings_voxelized = self._spatial_smoothing(recordings, fwhm=1, res=.5)
+
+        # 3. compute face selectivity
+        face_selectivities_voxel = self._determine_face_selectivity(recordings_voxelized)
+
+        # 4. Determine location
+        if self._perturbation_location == 'within_facepatch':
+            x, y = self._get_purity_center(face_selectivities_voxel)
+        elif self._perturbation_location == 'outside_facepatch':
+            x, y = self._sample_outside_FP(face_selectivities_voxel)
+        else:
+            raise KeyError
+
+        self._perturbation_coordinates = (x, y)
+
+    def _set_up_perturbations(self, perturbation_location):
+        '''
+        :param: perturbation_location: string ['within_facepatch','outside_facepatch']
+        :return: list of dict, each containing parameters for one perturbation
+        '''
+        self._perturbation_location = perturbation_location
+
+        perturbation_list = []
+        for stimulation, current in zip(STIMULATION_PARAMETERS['type'], STIMULATION_PARAMETERS['current_pulse_mA']):
+            perturbation_dict = {'type': stimulation,
+                                 'perturbation_parameters': {
+                                     'current_pulse_mA': current,
+                                     'stimulation_duration_ms': STIMULATION_PARAMETERS['stimulation_duration_ms'],
+                                     'location': LazyLoad(self._perturbation_coordinates)
+                                 }}
+
+            perturbation_list.append(perturbation_dict)
+        return perturbation_list
 
     def _collect_target_assembly(self):
         '''
         TODO make sure assembly.stimulus_set corresponds to target_stimulus_class
+        TODO stimulus set FP
+        TODO stimulus set training decoder
         TODO full list of objects
+        TODO make sure assembly has source attribute --> ceiling??
         Load Data from path + subselect as specified by Experiment
 
         :return: DataAssembly
@@ -224,7 +253,7 @@ class _Moeller2017(BenchmarkBase):
 
         return target_assembly
 
-    def _get_decoder(self, candidate):
+    def _set_up_decoder(self, candidate):
         '''
         TODO find linear model
         TODO sample recordings
@@ -237,7 +266,120 @@ class _Moeller2017(BenchmarkBase):
         stimulus_set = None  # TODO
         truth = None  # TODO
         decoder.fit(stimulus_set, truth)
-        return decoder
+        self._decoder = decoder
+
+    def _spatial_smoothing(self, assembly, fwhm=1., res=0.5):
+        """
+        Adapted from Hyo's 2020 paper code
+        Do spatial filtering for each voxel
+            Args:
+                fwmh: FWMH for the gaussian kernel. default is 3mm.
+        """
+
+        def _get_grid_coord():
+            """
+            Adapted from Hyo's 2020 paper code
+            Returns coordinates of grid with width of 0.5
+            """
+            x = x.reshape(len(x), 1)
+            y = y.reshape(len(y), 1)
+            xmin, xmax = np.floor(np.min(x)), np.ceil(np.max(x))
+            ymin, ymax = np.floor(np.min(y)), np.ceil(np.max(y))
+            grids = np.array(np.meshgrid(np.arange(xmin, xmax, res), np.arange(ymin, ymax, res)))
+            gridx = grids[0].flatten().reshape(-1, 1)
+            gridy = grids[1].flatten().reshape(-1, 1)
+            return gridx, gridy
+
+        # Get voxel coordinates
+        x, y = assembly.neuroid.tissue_x.values, assembly.neuroid.tissue_y.values
+        gridx, gridy = _get_grid_coord()
+
+        # compute sigma from fwmh
+        sigma = fwhm / np.sqrt(8. * np.log(2))
+
+        # define gaussian kernel
+        d_square = (x - gridx.T) ** 2 + (y - gridy.T) ** 2
+        gf = 1. / (2 * np.pi * sigma ** 2) * np.exp(- d_square / (2 * sigma ** 2))
+
+        features_smoothed = DataArray(
+            data=np.dot(assembly.values, gf),
+            dims=['category_name', 'neuroid_id'],
+            coords={'category_name': assembly.category_name.values,
+                    'neuroid_id': assembly.neuroid_id.values,
+                    'voxel_x': gridx.squeeze(),  # TODO
+                    'voxel_y': gridy.squeeze()}
+        )
+        return features_smoothed,
+
+    @staticmethod
+    def _get_purity_center(selectivity_assembly,
+                           radius=1):
+        '''
+        Adapted from Hyo's 2020 paper code
+        Computes the cell of the selectivity map with the highest purity
+        Inputs:
+            radius (scalar): radius in mm of the circle in which to consider units
+        '''
+
+        def get_purity(center_x, center_y):
+            '''
+            Evaluates purity at a given center position, radius, and corresponding selectivity values
+            '''
+            passing_indices = np.where(np.sqrt(np.square(x - center_x) + np.square(y - center_y)) < radius)[0]
+            return 100. * np.sum(selectivity_assembly.values[passing_indices]) / passing_indices.shape[0]
+
+        x, y = selectivity_assembly.voxel_x.values, selectivity_assembly.voxel_y.values
+        purity = np.array(list(map(get_purity, x, y)))
+        highest_purity_idx = np.argmax(purity)
+
+        center_x, center_y = x[highest_purity_idx], y[highest_purity_idx]
+        return center_x, center_y
+
+    @staticmethod
+    def _determine_face_selectivity(recordings):
+        def mean_var(neuron):
+            mean, var = np.mean(neuron.values), np.var(neuron.values)
+            return mean, var
+
+        assert (recordings >= 0).all()
+
+        selectivities = []
+        for neuroid_id in tqdm(recordings['neuroid_id'].values, desc='neuron face dprime'):
+            neuron = recordings.sel(neuroid_id=neuroid_id)
+            neuron = neuron.squeeze()
+            face_mean, face_variance = mean_var(neuron.sel(category_name='Faces'))  # image_label='face'))
+            nonface_mean, nonface_variance = mean_var(
+                neuron.where(neuron.category_name != 'Faces', drop=True))  # sel(image_label='nonface'))
+            dprime = (face_mean - nonface_mean) / np.sqrt((face_variance + nonface_variance) / 2)
+            selectivities.append(dprime)
+
+        selectivity_array = recordings.copy()  # DataArray(result, coords={'neuroid_id': recordings['neuroid_id'].values}, dims=['neuroid_id'])
+        selectivity_array.data = selectivities
+        return selectivity_array
+
+    def _sample_outside_FP(self, selectivity_assembly, threshold=.67, radius=1):
+        '''
+        Sample one voxel outside of face patch
+        1. make a list of voxels where neither the voxel nor its close neighbors are in a face patch
+        2. randomly sample from list
+        :param selectivity_assembly:
+        :param threshold: dprime threshold -> values < threshold are not thought to be selective
+        :param radius: determining the neighborhood size in mm of each voxel that cannot be selective
+        :return: x, y location of voxel outside FP
+        '''
+        outside_FP_selectivities = selectivity_assembly[selectivity_assembly.values < threshold]
+        voxels = []
+        for voxel in outside_FP_selectivities:
+            inside_radius = np.where(np.sqrt(np.square(outside_FP_selectivities.voxel_x.values - voxel.voxel_x.values) +
+                                             np.square(outside_FP_selectivities.voxel_y.values - voxel.voxel_y.values))
+                                     < radius)[0]
+            if np.all(outside_FP_selectivities[inside_radius].values < threshold):
+                voxels.append(voxel)
+
+        rng = np.random.default_rng(seed=self._seed)
+        voxel = rng.choice(voxels)
+        x, y = voxel.voxel_x, voxel.voxel_y
+        return x, y
 
     @staticmethod
     def _load_assembly():
@@ -247,15 +389,6 @@ class _Moeller2017(BenchmarkBase):
         TODO get stimulus set
         make sure it has a monkey dimension for ceiling computation
         :return: DataArray
-        '''
-        assembly = None  # TODO
-        return assembly
-
-    @staticmethod
-    def _collect_train_assembly():
-        '''
-        TODO load assembly from path
-        :return: Assembly of training stimuli
         '''
         assembly = None  # TODO
         return assembly
@@ -274,50 +407,30 @@ class _Moeller2017(BenchmarkBase):
         return behavior
 
     @staticmethod
-    def _behavior_to_dataarray(behavior_data):
-        # TODO change to brainio dataarray
-        choices = truths = categories = []
-        for choice, truth, category in behavior_data:
-            choices.append(choice)
-            truths.append(truth)
-            categories.append(category)
-
-        xarray_behavior = DataArray(
-            data=choices,
-            dims=["meta"],
-            coords={
-                'meta': pd.MultiIndex.from_product([truths, categories],
-                                                   names=('truths', 'categories'))
-            }
-        )
-
-        return xarray_behavior
-
-    @staticmethod
-    def _performance_to_xarray(performance_data):
+    def _list_to_dataarray(data_tuple_list, dimensions):
         '''
         TODO change to brainio DataArray
         Create DataArray from list of tuples
-        :param performance_data: list of tuples; ea/ containing 3 values: (performance, condition, current_pulse_mA)
+        :param performance_data: list of tuples
+        :param dimensions: list of string: dimension names, order <=> order in ea/ tuple, one dim must be 'values'
         :return: DataArray containing all input info
         '''
-        performances = object_names = conditions = currents = []
-        for performance, object_name, condition, current in performance_data:
-            performances.append(performance)
-            object_names.append(object_name)
-            conditions.append(condition)
-            currents.append(current)
+        data_dict = dict.fromkeys(dimensions, [])
+        for data_tuple in data_tuple_list:
+            for dimension, data_item in zip(dimensions, data_tuple):
+                data_dict[dimension].append(data_item)
 
-        xarray_performance = DataArray(
-            data=performances,
+        dimensions = dimensions.remove('values')
+        dataarray = DataArray(
+            data=data_dict['values'],
             dims=["meta"],
             coords={
-                'meta': pd.MultiIndex.from_product([object_names, conditions, currents],
-                                                   names=('object_name', 'condition', 'current_pulse_mA'))
+                'meta': pd.MultiIndex.from_product([data_dict[k] for k in dimensions],
+                                                   names=dimensions)
             }
         )
 
-        return xarray_performance
+        return dataarray
 
 
 def Moeller2017Exp1():
@@ -332,20 +445,25 @@ def Moeller2017Exp1():
 
 def Moeller2017Exp2():
     '''
-    # TODO this does not work, returning 2 benchmarks -> helper benchmark? -? very unclean
+    TODO  very unclean
     EXP2:
     i: Stimulate outside of the face patch during face identification
     ii: Stimulate face patch during object identification
-
     '''
-    a = {'Experiment_2i': {'stimulus_class': 'faces',
-                           'stimulation_location': 'outside_facepatch'},
-         'Experiment_2ii': {'stimulus_class': 'objects',
-                            'stimulation_location': 'within_facepatch'}}
-    exp2i = _Moeller2017(experiment='Experiment_2i')
-    exp2ii = _Moeller2017(experiment='Experiment_2ii')
-    exp2 = (exp2i, exp2ii)
-    return exp2
+
+    class _Moeller2017Exp2(BenchmarkBase):
+        def __init__(self):
+            super().__init__(
+                identifier='dicarlo.Moeller2017-Experiment_2', ceiling_func=None, version=1, parent='IT', bibtex=BIBTEX)
+            self.benchmark1 = _Moeller2017(stimulus_class='faces', perturbation_location='outside_facepatch',
+                                           identifier='dicarlo.Moeller2017-Experiment_2i')
+            self.benchmark2 = _Moeller2017(stimulus_class='objects', perturbation_location='within_facepatch',
+                                           identifier='dicarlo.Moeller2017-Experiment_2ii')
+
+        def __call__(self, candidate):
+            return self.benchmark1(candidate), self.benchmark2(candidate)
+
+    return _Moeller2017Exp2()
 
 
 def Moeller2017Exp3():
