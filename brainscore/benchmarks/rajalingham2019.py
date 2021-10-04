@@ -52,7 +52,7 @@ BIBTEX = """@article{RAJALINGHAM2019493,
 # "Each inactivation session began with a single focal microinjection of 1ml of muscimol
 # (5mg/mL, Sigma Aldrich) at a slow rate (100nl/min) via a 30-gauge stainless-steel cannula at
 # the targeted site in ventral IT."
-PERTURBATION_PARAMETERS = {
+MUSCIMOL_PARAMETERS = {
     'amount_microliter': 1
 }
 
@@ -98,7 +98,7 @@ class _Rajalingham2019(BenchmarkBase):
         # stay between [0, 10] since that is the extent of the tissue
         injection_locations = self.sample_points([2, 2], [8, 8], num=self._num_sites)
         for site, injection_location in enumerate(injection_locations):
-            perturbation_parameters = {**PERTURBATION_PARAMETERS,
+            perturbation_parameters = {**MUSCIMOL_PARAMETERS,
                                        **{'location': injection_location}}
             perturbed_behavior = self._perform_task_perturbed(candidate,
                                                               perturbation_parameters=perturbation_parameters,
