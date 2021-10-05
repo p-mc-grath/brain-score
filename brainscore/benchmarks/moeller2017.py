@@ -1,16 +1,15 @@
 from brainscore.utils import LazyLoad
 from tqdm import tqdm
-from xarray import DataArray
 import numpy as np
 import pandas as pd
 import xarray as xr
+from sklearn.linear_model import LinearRegression
 from brainscore.metrics.inter_individual_stats_ceiling import InterIndividualStatisticsCeiling
 from brainscore.benchmarks import BenchmarkBase
 from brainscore.model_interface import BrainModel
-
-# TODO create metrics
-from brainscore.metrics.performance_measures import percent_correct
-from brainscore.metrics.performance_similarity import performance_similarity
+from brainscore.metrics.accuracy import Accuracy
+from brainscore.metrics.performance_similarity import PerformanceSimilarity  # TODO
+from brainio.assemblies import merge_data_arrays, DataArray
 
 BIBTEX = '''@article{article,
             author = {Moeller, Sebastian and Crapse, Trinity and Chang, Le and Tsao, Doris},
@@ -32,13 +31,16 @@ STIMULATION_PARAMETERS = {
     'stimulation_duration_ms': 200
 }
 
+DPRIME_THRESHOLD_FACE_PATCH = .85  # equiv to .65 in monkey
+DPRIME_THRESHOLD = .66  # equiv to .5 in monkey
+
 
 class _Moeller2017(BenchmarkBase):
 
     def __init__(self, stimulus_class, perturbation_location,
                  identifier,
-                 metric=performance_similarity,
-                 performance_measure=percent_correct):
+                 metric=PerformanceSimilarity,
+                 performance_measure=Accuracy):
         '''
         Perform a same vs different identity judgement task on the given dataset
             with and without Microstimulation in the specified location.
@@ -92,10 +94,9 @@ class _Moeller2017(BenchmarkBase):
             behavior = self._perform_task(candidate, perturbation=perturbation)
             performance = self._compute_performance(behavior)
             candidate_performance.append(performance)
+        candidate_performance = merge_data_arrays(candidate_performance)
 
-        # TODO use martins merge instead of concat
-        candidate_performance = xr.concat(candidate_performance, dim='meta')  # merge_data_arrays(candidate_performance)
-
+        # TODO 1/3 trials perturbed, 2/3 w/o perturbation
         score = self._metric(candidate_performance, self._target_assembly)
         return score
 
@@ -113,7 +114,7 @@ class _Moeller2017(BenchmarkBase):
         IT_recordings = candidate.look_at(self._stimulus_set)
 
         behavior = self._compute_behavior(IT_recordings)
-        behavior = self._add_perturbation_info(behavior, perturbation)
+        behavior['current_pulse_mA'] = behavior.dims[0], perturbation['perturbation_parameters']['current_pulse_mA']
         return behavior
 
     def _compute_behavior(self, IT_recordings):
@@ -156,10 +157,10 @@ class _Moeller2017(BenchmarkBase):
         for object_name in set(IT_recordings.object_name):
             for condition in ['same_id', 'different_id']:
                 for recording_image_one, recording_image_two in _sample_recordings():
-                    choice = self._decoder(recording_image_one, recording_image_two)  # TODO
+                    choice = self._decoder.predict(np.stack(recording_image_one, recording_image_two))
                     behavior_data.append((choice, condition, object_name))
 
-        behaviors = self._list_to_dataarray(behavior_data, dimensions=['values', 'condition', 'object_name'])
+        behaviors = self._list_to_dataarray(behavior_data, coords=['values', 'condition', 'object_name'])
         return behaviors
 
     def _compute_performance(self, behavior):
@@ -175,10 +176,10 @@ class _Moeller2017(BenchmarkBase):
                     performance = self._performance_measure(behavior.sel(current_pulse_mA=current_pulse_mA,
                                                                          condition=condition,
                                                                          object_name=object_name))
-                    performance_data.append((performance, object_name, condition, current_pulse_mA))
+                    performance_data.append((performance, condition, object_name, current_pulse_mA))
 
         performances = self._list_to_dataarray(performance_data,
-                                               dimensions=['values', 'object_name', 'condition', 'current_pulse_mA'])
+                                               coords=['values', 'condition', 'object_name', 'current_pulse_mA'])
         return performances
 
     def _compute_perturbation_coordinates(self, candidate):
@@ -255,18 +256,16 @@ class _Moeller2017(BenchmarkBase):
 
     def _set_up_decoder(self, candidate):
         '''
-        TODO find linear model
         TODO sample recordings
         :return:
         '''
         candidate.start_recording()
-
-        decoder = None  # TODO
         recordings = candidate.look_at(self._training_assembly.stimulus_set)
-        stimulus_set = None  # TODO
-        truth = None  # TODO
-        decoder.fit(stimulus_set, truth)
-        self._decoder = decoder
+        stimulus_set = None  # TODO input: concat two activation vecs
+        truth = None  # TODO output: choice {0,1}
+
+        self._decoder = LinearRegression()
+        self._decoder.fit(stimulus_set, truth)
 
     def _spatial_smoothing(self, assembly, fwhm=1., res=0.5):
         """
@@ -357,23 +356,22 @@ class _Moeller2017(BenchmarkBase):
         selectivity_array.data = selectivities
         return selectivity_array
 
-    def _sample_outside_FP(self, selectivity_assembly, threshold=.67, radius=1):
+    def _sample_outside_FP(self, selectivity_assembly, radius=2):
         '''
         Sample one voxel outside of face patch
         1. make a list of voxels where neither the voxel nor its close neighbors are in a face patch
         2. randomly sample from list
         :param selectivity_assembly:
-        :param threshold: dprime threshold -> values < threshold are not thought to be selective
         :param radius: determining the neighborhood size in mm of each voxel that cannot be selective
         :return: x, y location of voxel outside FP
         '''
-        outside_FP_selectivities = selectivity_assembly[selectivity_assembly.values < threshold]
+        not_selective_voxels = selectivity_assembly[selectivity_assembly.values < DPRIME_THRESHOLD]
         voxels = []
-        for voxel in outside_FP_selectivities:
-            inside_radius = np.where(np.sqrt(np.square(outside_FP_selectivities.voxel_x.values - voxel.voxel_x.values) +
-                                             np.square(outside_FP_selectivities.voxel_y.values - voxel.voxel_y.values))
+        for voxel in not_selective_voxels:
+            inside_radius = np.where(np.sqrt(np.square(not_selective_voxels.voxel_x.values - voxel.voxel_x.values) +
+                                             np.square(not_selective_voxels.voxel_y.values - voxel.voxel_y.values))
                                      < radius)[0]
-            if np.all(outside_FP_selectivities[inside_radius].values < threshold):
+            if np.all(not_selective_voxels[inside_radius].values < DPRIME_THRESHOLD_FACE_PATCH):
                 voxels.append(voxel)
 
         rng = np.random.default_rng(seed=self._seed)
@@ -394,40 +392,23 @@ class _Moeller2017(BenchmarkBase):
         return assembly
 
     @staticmethod
-    def _add_perturbation_info(behavior, perturbation):
+    def _list_to_dataarray(data_tuple_list, coords):
         '''
-        Adds current_pulse_mA information to behavior
-        :param behavior: DataArray
-        :param perturbation: dict within dict with perturbation['perturbation_parameters']['current_pulse_mA'] = int
-        :return: Behavior with added information on stimulus current_pulse_mA
-        '''
-        behavior = behavior.expand_dims('current_pulse_mA')
-        behavior['current_pulse_mA'] = perturbation['perturbation_parameters']['current_pulse_mA']
-        behavior = type(behavior)(behavior)  # make sure site and injected are indexed
-        return behavior
-
-    @staticmethod
-    def _list_to_dataarray(data_tuple_list, dimensions):
-        '''
-        TODO change to brainio DataArray
         Create DataArray from list of tuples
-        :param performance_data: list of tuples
-        :param dimensions: list of string: dimension names, order <=> order in ea/ tuple, one dim must be 'values'
+        :param performance_data: list of tuples, in tuple order <=> order of coords
+        :param coords: list of string: coord names, order <=> order in ea/ tuple, one dim must be 'values'
         :return: DataArray containing all input info
         '''
-        data_dict = dict.fromkeys(dimensions, [])
+        data_dict = dict.fromkeys(coords, [])
         for data_tuple in data_tuple_list:
-            for dimension, data_item in zip(dimensions, data_tuple):
-                data_dict[dimension].append(data_item)
+            for coord, data_item in zip(coords, data_tuple):
+                data_dict[coord].append(data_item)
 
-        dimensions = dimensions.remove('values')
+        coords = coords.remove('values')
         dataarray = DataArray(
             data=data_dict['values'],
-            dims=["meta"],
-            coords={
-                'meta': pd.MultiIndex.from_product([data_dict[k] for k in dimensions],
-                                                   names=dimensions)
-            }
+            dims=[coords[0]],
+            coords={coord: (coords[0], data_dict[coord]) for coord in coords}  # TODO if have to do coords[0] separately
         )
 
         return dataarray
