@@ -9,7 +9,7 @@ from tqdm import tqdm
 from brainio.assemblies import merge_data_arrays, walk_coords, array_is_element, DataAssembly
 from brainscore.metrics import Metric, Score
 from brainscore.metrics.image_level_behavior import _o2
-from brainscore.metrics.regression import linear_regression
+from brainscore.metrics.regression import linear_regression, ridge_regression
 from brainscore.utils import fullname
 
 
@@ -60,7 +60,7 @@ class DeficitPrediction(Metric):
         #       f"Test: {test_tasks}")
 
         # map: regress from source to target
-        regression = linear_regression(
+        regression = ridge_regression(
             xarray_kwargs=dict(expected_dims=('task', 'site'),
                                neuroid_dim='site',
                                neuroid_coord='site_iteration',
