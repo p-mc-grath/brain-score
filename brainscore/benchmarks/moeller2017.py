@@ -1,8 +1,6 @@
 from brainscore.utils import LazyLoad
 from tqdm import tqdm
 import numpy as np
-import pandas as pd
-import xarray as xr
 from sklearn.linear_model import LinearRegression
 from brainscore.metrics.inter_individual_stats_ceiling import InterIndividualStatisticsCeiling
 from brainscore.benchmarks import BenchmarkBase
@@ -23,7 +21,7 @@ BIBTEX = '''@article{article,
             }'''
 
 STIMULATION_PARAMETERS = {
-    'type': [None, BrainModel.Perturbation.microstimulation, BrainModel.Perturbation.microstimulation]
+    'type': [None, BrainModel.Perturbation.microstimulation, BrainModel.Perturbation.microstimulation],
     'current_pulse_mA': [0, 100, 300],
     'pulse_rate_Hz': 150,
     'pulse_duration_ms': 0.2,
@@ -31,8 +29,8 @@ STIMULATION_PARAMETERS = {
     'stimulation_duration_ms': 200
 }
 
+DPRIME_THRESHOLD_SELECTIVITY = .66  # equiv to .5 in monkey
 DPRIME_THRESHOLD_FACE_PATCH = .85  # equiv to .65 in monkey
-DPRIME_THRESHOLD = .66  # equiv to .5 in monkey
 
 
 class _Moeller2017(BenchmarkBase):
@@ -96,7 +94,6 @@ class _Moeller2017(BenchmarkBase):
             candidate_performance.append(performance)
         candidate_performance = merge_data_arrays(candidate_performance)
 
-        # TODO 1/3 trials perturbed, 2/3 w/o perturbation
         score = self._metric(candidate_performance, self._target_assembly)
         return score
 
@@ -119,9 +116,6 @@ class _Moeller2017(BenchmarkBase):
 
     def _compute_behavior(self, IT_recordings):
         '''
-        TODO xarray rng compatibility
-        TODO xarray indexing compatibility
-        TODO xarray lin model compatibility
         TODO actually sample vs. exhaustively run all conditions
         Compute behavior of given IT recordings in a identity matching task,
             i.e. given two images of the same category judge if they depict an object of same or different identity
@@ -137,30 +131,41 @@ class _Moeller2017(BenchmarkBase):
         '''
 
         def _sample_recordings():
-            rng = np.random.defaul_rng(seed=self._seed)
-            number_of_samples = 1000
+            rng = np.random.default_rng(seed=self._seed)
+            recording_size = len(IT_recordings[0].values)
 
-            recording_pool_one = IT_recordings.sel(object_name=object_name)
-            recordings_image_one = rng.choice(recording_pool_one, number_of_samples)  # TODO
-            if condition == 'same_id':
-                recordings_image_two = rng.choice(recording_pool_one, number_of_samples)
-                not_same_recording = recordings_image_one != recordings_image_two
-                recordings_image_one = recordings_image_one[not_same_recording]  # TODO
-                recordings_image_two = recordings_image_two[not_same_recording]  # TODO
-            elif condition == 'different_id':
-                recording_pool_two = IT_recordings.where(IT_recordings.object_name != object_name, drop=True)
-                recordings_image_two = rng.choice(recording_pool_two, number_of_samples)
+            category_pool = IT_recordings.sel(object_name=object_name)
+            random_indeces = rng.integers(0, len(category_pool), (samples, 2))
 
-            return zip(recordings_image_one, recordings_image_two)
+            sampled_recordings = np.full((samples, recording_size * 2), np.nan)
+            for i, (random_idx_same, random_idx_different) in enumerate(random_indeces):
+                # 'same_id': object_id ==, image_id!=
+                image_one_same = category_pool[random_idx_same]
+                sampled_recordings[i, :recording_size] = image_one_same.values
+                sampled_recordings[i, recording_size:] = rng.choice(category_pool.where(
+                    category_pool.object_id == image_one_same.object_id and
+                    category_pool.image_id != image_one_same.image_id))
 
+                # 'different_id': object_id !=
+                image_one_diff = category_pool[random_idx_different]
+                sampled_recordings[i + samples, :recording_size] = image_one_diff.values
+                sampled_recordings[i + samples, recording_size:] = rng.choice(category_pool.where(
+                    category_pool.object_id != image_one_diff.object_id))
+
+            conditions = ['same_id'] * samples + ['different_id'] * samples
+            return sampled_recordings, conditions
+
+        samples = 500
         behavior_data = []
         for object_name in set(IT_recordings.object_name):
-            for condition in ['same_id', 'different_id']:
-                for recording_image_one, recording_image_two in _sample_recordings():
-                    choice = self._decoder.predict(np.stack(recording_image_one, recording_image_two))
-                    behavior_data.append((choice, condition, object_name))
+            recordings, conditions = _sample_recordings()
+            choices = self._decoder.predict(recordings)
+            behavior = DataArray(data=choices, dims='condition',
+                                 coords={'condition': conditions,
+                                         'object_name': ('condition', [object_name] * samples * 2)})
+            behavior_data.append(behavior)
 
-        behaviors = self._list_to_dataarray(behavior_data, coords=['values', 'condition', 'object_name'])
+        behaviors = merge_data_arrays(behavior_data)
         return behaviors
 
     def _compute_performance(self, behavior):
@@ -176,10 +181,13 @@ class _Moeller2017(BenchmarkBase):
                     performance = self._performance_measure(behavior.sel(current_pulse_mA=current_pulse_mA,
                                                                          condition=condition,
                                                                          object_name=object_name))
-                    performance_data.append((performance, condition, object_name, current_pulse_mA))
+                    performance_array = DataArray(data=performance, dims='condition',
+                                                  coords={'condition': condition,
+                                                          'object_name': ('condition', object_name),
+                                                          'current_pulse_mA': ('condition', current_pulse_mA)})
+                    performance_data.append(performance_array)
 
-        performances = self._list_to_dataarray(performance_data,
-                                               coords=['values', 'condition', 'object_name', 'current_pulse_mA'])
+        performances = merge_data_arrays(performance_data)
         return performances
 
     def _compute_perturbation_coordinates(self, candidate):
@@ -251,18 +259,19 @@ class _Moeller2017(BenchmarkBase):
 
         target_stimulus_class = STIMULUS_CLASS_DICT[self._stimulus_class]
         target_assembly = assembly.multisel(object_name=target_stimulus_class)  # TODO
-
+        # TODO add object_ID & image_ID coords; image_ID = expression or viewing angle
         return target_assembly
 
     def _set_up_decoder(self, candidate):
         '''
+        Fit a linear regression between the recordings of the training stimuli and the ground truth
+        Assign to self._decoder
         TODO sample recordings
-        :return:
         '''
         candidate.start_recording()
-        recordings = candidate.look_at(self._training_assembly.stimulus_set)
-        stimulus_set = None  # TODO input: concat two activation vecs
-        truth = None  # TODO output: choice {0,1}
+        recordings = candidate.look_at(self._stimulus_set_training)
+        stimulus_set = None
+        truth = None
 
         self._decoder = LinearRegression()
         self._decoder.fit(stimulus_set, truth)
@@ -365,7 +374,7 @@ class _Moeller2017(BenchmarkBase):
         :param radius: determining the neighborhood size in mm of each voxel that cannot be selective
         :return: x, y location of voxel outside FP
         '''
-        not_selective_voxels = selectivity_assembly[selectivity_assembly.values < DPRIME_THRESHOLD]
+        not_selective_voxels = selectivity_assembly[selectivity_assembly.values < DPRIME_THRESHOLD_SELECTIVITY]
         voxels = []
         for voxel in not_selective_voxels:
             inside_radius = np.where(np.sqrt(np.square(not_selective_voxels.voxel_x.values - voxel.voxel_x.values) +
@@ -390,28 +399,6 @@ class _Moeller2017(BenchmarkBase):
         '''
         assembly = None  # TODO
         return assembly
-
-    @staticmethod
-    def _list_to_dataarray(data_tuple_list, coords):
-        '''
-        Create DataArray from list of tuples
-        :param performance_data: list of tuples, in tuple order <=> order of coords
-        :param coords: list of string: coord names, order <=> order in ea/ tuple, one dim must be 'values'
-        :return: DataArray containing all input info
-        '''
-        data_dict = dict.fromkeys(coords, [])
-        for data_tuple in data_tuple_list:
-            for coord, data_item in zip(coords, data_tuple):
-                data_dict[coord].append(data_item)
-
-        coords = coords.remove('values')
-        dataarray = DataArray(
-            data=data_dict['values'],
-            dims=[coords[0]],
-            coords={coord: (coords[0], data_dict[coord]) for coord in coords}  # TODO if have to do coords[0] separately
-        )
-
-        return dataarray
 
 
 def Moeller2017Exp1():
