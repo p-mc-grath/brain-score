@@ -35,10 +35,8 @@ DPRIME_THRESHOLD_FACE_PATCH = .85  # equiv to .65 in monkey
 
 class _Moeller2017(BenchmarkBase):
 
-    def __init__(self, stimulus_class, perturbation_location,
-                 identifier,
-                 metric=PerformanceSimilarity,
-                 performance_measure=Accuracy):
+    def __init__(self, stimulus_class, perturbation_location, identifier,
+                 metric=PerformanceSimilarity, performance_measure=Accuracy):
         '''
         Perform a same vs different identity judgement task on the given dataset
             with and without Microstimulation in the specified location.
@@ -58,7 +56,7 @@ class _Moeller2017(BenchmarkBase):
         '''
         super().__init__(
             identifier=identifier,
-            ceiling_func=lambda: InterIndividualStatisticsCeiling(metric)(self._target_assembly),
+            ceiling_func=lambda: None,
             version=1, parent='IT',
             bibtex=BIBTEX)
 
@@ -116,53 +114,29 @@ class _Moeller2017(BenchmarkBase):
 
     def _compute_behavior(self, IT_recordings):
         '''
-        TODO actually sample vs. exhaustively run all conditions
         Compute behavior of given IT recordings in a identity matching task,
             i.e. given two images of the same category judge if they depict an object of same or different identity
         :param IT_recordings: DataArray:
             values: IT activation vectors
-            dims:   object_name : category
-                    object_ID   : object identity
-                    image_ID    : object + view angle identity
+            dims:   object_name : list of strings, category
+            coords: object_ID   : list of strings, object identity
+                    image_ID    : list of strings, object + view angle identity
         :return: behaviors DataArray
             values: choice
-            dims:   truth       : ground truth
-                    object_name : category
+            dims:   truth       : list of int/bool, 'same_id'==1, 'different_id'==0,
+            coords: condition   : list of strings, ['same_id == 1, 'different_id'==0]
+                    object_name : list of strings, category
         '''
-
-        def _sample_recordings():
-            rng = np.random.default_rng(seed=self._seed)
-            recording_size = len(IT_recordings[0].values)
-
-            category_pool = IT_recordings.sel(object_name=object_name)
-            random_indeces = rng.integers(0, len(category_pool), (samples, 2))
-
-            sampled_recordings = np.full((samples, recording_size * 2), np.nan)
-            for i, (random_idx_same, random_idx_different) in enumerate(random_indeces):
-                # 'same_id': object_id ==, image_id!=
-                image_one_same = category_pool[random_idx_same]
-                sampled_recordings[i, :recording_size] = image_one_same.values
-                sampled_recordings[i, recording_size:] = rng.choice(category_pool.where(
-                    category_pool.object_id == image_one_same.object_id and
-                    category_pool.image_id != image_one_same.image_id))
-
-                # 'different_id': object_id !=
-                image_one_diff = category_pool[random_idx_different]
-                sampled_recordings[i + samples, :recording_size] = image_one_diff.values
-                sampled_recordings[i + samples, recording_size:] = rng.choice(category_pool.where(
-                    category_pool.object_id != image_one_diff.object_id))
-
-            conditions = ['same_id'] * samples + ['different_id'] * samples
-            return sampled_recordings, conditions
-
         samples = 500
         behavior_data = []
         for object_name in set(IT_recordings.object_name):
-            recordings, conditions = _sample_recordings()
+            recordings, conditions = self._sample_recordings(IT_recordings.sel(object_name=object_name),
+                                                             samples=samples)
             choices = self._decoder.predict(recordings)
             behavior = DataArray(data=choices, dims='condition',
-                                 coords={'condition': conditions,
-                                         'object_name': ('condition', [object_name] * samples * 2)})
+                                 coords={'truth': np.array(conditions) == 'same_id',
+                                         'condition': ('truth', conditions),
+                                         'object_name': ('truth', [object_name] * samples * 2)})
             behavior_data.append(behavior)
 
         behaviors = merge_data_arrays(behavior_data)
@@ -171,8 +145,17 @@ class _Moeller2017(BenchmarkBase):
     def _compute_performance(self, behavior):
         '''
         Given performance measure and behavior, compute performance w.r.t. current_pulse_mA, condition, object name
-        :param behavior: DataArray: values = choice, dims = [truth, current_pulse_mA, condition, object name]
-        :return: DataArray: values = performances, dims = [current_pulse_mA, condition, object_name]
+        :param behavior: DataArray:
+            values: choice,
+            dims:   truth           : 'same_id'==1, 'different_id'==0
+            coords: condition       : list of strings, ['same_id', 'different_id]
+                    object name     : list of strings, category
+                    current_pulse_mA: float
+        :return: DataArray:
+            values: performances    : accuracy values
+            dims:   condition       : list of strings, ['same_id', 'different_id]
+            coords: object_name     : list of strings, category
+                    current_pulse_mA: float
         '''
         performance_data = []
         for object_name in set(behavior.object_name):
@@ -189,6 +172,77 @@ class _Moeller2017(BenchmarkBase):
 
         performances = merge_data_arrays(performance_data)
         return performances
+
+    def _set_up_perturbations(self, perturbation_location):
+        '''
+        Create a list of dictionaries, each containing the parameters for one perturbation
+        :param: perturbation_location: string ['within_facepatch','outside_facepatch']
+        :return: list of dict, each containing parameters for one perturbation
+        '''
+        self._perturbation_location = perturbation_location
+
+        perturbation_list = []
+        for stimulation, current in zip(STIMULATION_PARAMETERS['type'], STIMULATION_PARAMETERS['current_pulse_mA']):
+            perturbation_dict = {'type': stimulation,
+                                 'perturbation_parameters': {
+                                     'current_pulse_mA': current,
+                                     'stimulation_duration_ms': STIMULATION_PARAMETERS['stimulation_duration_ms'],
+                                     'location': LazyLoad(self._perturbation_coordinates)
+                                 }}
+
+            perturbation_list.append(perturbation_dict)
+        return perturbation_list
+
+    def _set_up_decoder(self, candidate):
+        '''
+        Fit a linear regression between the recordings of the training stimuli and the ground truth
+        Assign to self._decoder
+        '''
+        candidate.start_recording()
+        recordings = candidate.look_at(self._stimulus_set_training)
+        samples = 500
+
+        stimulus_set = truth = []
+        for object_name in set(recordings.object_name):
+            recordings, conditions = self._sample_recordings(recordings.sel(object_name=object_name),
+                                                             samples=samples)
+            stimulus_set.append(recordings)
+            truth += np.array(conditions) == 'same_id'
+        stimulus_set = np.vstack(stimulus_set)
+
+        self._decoder = LinearRegression()
+        self._decoder.fit(stimulus_set, truth)
+
+    def _sample_recordings(self, category_pool, samples=500):
+        '''
+        Create an array of randomly sampled recordings, each line is one task, i.e. two recordings which are to be
+        judged same vs. different ID
+        :param category_pool: DataArray: Model IT recordings, assumed be from one category only
+        :param samples: int: number of samples
+        :return: array (samples x length of two concatenated recordings), each line contains two recordings
+                 ground truth, for each line in array, specifying if the two recordings belong to the same/different ID
+        '''
+        rng = np.random.default_rng(seed=self._seed)
+        recording_size = len(category_pool[0].values)
+        random_indeces = rng.integers(0, len(category_pool), (samples, 2))
+
+        sampled_recordings = np.full((samples, recording_size * 2), np.nan)
+        for i, (random_idx_same, random_idx_different) in enumerate(random_indeces):
+            # 'same_id': object_id ==, image_id!=
+            image_one_same = category_pool[random_idx_same]
+            sampled_recordings[i, :recording_size] = image_one_same.values
+            sampled_recordings[i, recording_size:] = rng.choice(category_pool.where(
+                category_pool.object_id == image_one_same.object_id and
+                category_pool.image_id != image_one_same.image_id))
+
+            # 'different_id': object_id !=
+            image_one_diff = category_pool[random_idx_different]
+            sampled_recordings[i + samples, :recording_size] = image_one_diff.values
+            sampled_recordings[i + samples, recording_size:] = rng.choice(category_pool.where(
+                category_pool.object_id != image_one_diff.object_id))
+
+        conditions = ['same_id'] * samples + ['different_id'] * samples
+        return sampled_recordings, conditions
 
     def _compute_perturbation_coordinates(self, candidate):
         '''
@@ -215,73 +269,19 @@ class _Moeller2017(BenchmarkBase):
 
         self._perturbation_coordinates = (x, y)
 
-    def _set_up_perturbations(self, perturbation_location):
-        '''
-        :param: perturbation_location: string ['within_facepatch','outside_facepatch']
-        :return: list of dict, each containing parameters for one perturbation
-        '''
-        self._perturbation_location = perturbation_location
-
-        perturbation_list = []
-        for stimulation, current in zip(STIMULATION_PARAMETERS['type'], STIMULATION_PARAMETERS['current_pulse_mA']):
-            perturbation_dict = {'type': stimulation,
-                                 'perturbation_parameters': {
-                                     'current_pulse_mA': current,
-                                     'stimulation_duration_ms': STIMULATION_PARAMETERS['stimulation_duration_ms'],
-                                     'location': LazyLoad(self._perturbation_coordinates)
-                                 }}
-
-            perturbation_list.append(perturbation_dict)
-        return perturbation_list
-
-    def _collect_target_assembly(self):
-        '''
-        TODO make sure assembly.stimulus_set corresponds to target_stimulus_class
-        TODO stimulus set FP
-        TODO stimulus set training decoder
-        TODO full list of objects
-        TODO make sure assembly has source attribute --> ceiling??
-        Load Data from path + subselect as specified by Experiment
-
-        :return: DataAssembly
-        '''
-        STIMULUS_CLASS_DICT = {
-            'faces': ['faces'],  # 32; 6 expression each
-            'objects': [],  # TODO 28; 3 viewing angles each
-            'non_face_objects_eliciting_FP_response_plus_faces': ['apples_bw', 'citrus_fruits_bw', 'teapots_bw',
-                                                                  'clocks_bw', 'faces_bw'],  # 15; 3/cats
-            'abstract_faces': ['face_cartoons', 'face_linedrawings', 'face_mooneys', 'face_silhouettes'],  # 16; 4/cat
-            'abstract_houses': ['house_cartoons', 'house_linedrawings', 'house_silhouettes', 'face_mooneys',
-                                'face_mooneys_inverted']  # 20; 4/cat
-        }
-
-        assembly = self._load_assembly()
-
-        target_stimulus_class = STIMULUS_CLASS_DICT[self._stimulus_class]
-        target_assembly = assembly.multisel(object_name=target_stimulus_class)  # TODO
-        # TODO add object_ID & image_ID coords; image_ID = expression or viewing angle
-        return target_assembly
-
-    def _set_up_decoder(self, candidate):
-        '''
-        Fit a linear regression between the recordings of the training stimuli and the ground truth
-        Assign to self._decoder
-        TODO sample recordings
-        '''
-        candidate.start_recording()
-        recordings = candidate.look_at(self._stimulus_set_training)
-        stimulus_set = None
-        truth = None
-
-        self._decoder = LinearRegression()
-        self._decoder.fit(stimulus_set, truth)
-
     def _spatial_smoothing(self, assembly, fwhm=1., res=0.5):
         """
         Adapted from Hyo's 2020 paper code
-        Do spatial filtering for each voxel
-            Args:
-                fwmh: FWMH for the gaussian kernel. default is 3mm.
+        Applies 2D Gaussian to tissue activations. Aggregates Voxels from tissue.
+        :param DataArray,
+            values: Activations
+            dims:   neuroid_id
+                        coords: tissue_x: x coordinates
+                                tissue_y: y coordinates
+                    presentations
+                        coords: category_name
+        :param fwmh: FWMH for the gaussian kernel. default is 1mm.
+        :param res: int, resolution of voxels in mm
         """
 
         def _get_grid_coord():
@@ -314,19 +314,24 @@ class _Moeller2017(BenchmarkBase):
             dims=['category_name', 'neuroid_id'],
             coords={'category_name': assembly.category_name.values,
                     'neuroid_id': assembly.neuroid_id.values,
-                    'voxel_x': gridx.squeeze(),  # TODO
-                    'voxel_y': gridy.squeeze()}
+                    'voxel_x': ('neuroid_id', gridx.squeeze()),
+                    'voxel_y': ('neuroid_id', gridy.squeeze())}
         )
         return features_smoothed,
 
     @staticmethod
-    def _get_purity_center(selectivity_assembly,
-                           radius=1):
+    def _get_purity_center(selectivity_assembly, radius=1):
         '''
         Adapted from Hyo's 2020 paper code
-        Computes the cell of the selectivity map with the highest purity
-        Inputs:
-            radius (scalar): radius in mm of the circle in which to consider units
+        Computes the voxel of the selectivity map with the highest purity
+        :param: selectivity_assembly: DataArray
+            dims: 'neuroid_id'
+                    coords:
+                        voxel_x: voxel coordinate
+                        voxel_y: voxel coordinate
+                  'category_name'
+        :param: radius (scalar): radius in mm of the circle in which to consider units
+        :return: (int,int) location of highest purity
         '''
 
         def get_purity(center_x, center_y):
@@ -345,6 +350,12 @@ class _Moeller2017(BenchmarkBase):
 
     @staticmethod
     def _determine_face_selectivity(recordings):
+        '''
+        Determines face selectivity of each neuroid
+        :param recordings: DataArray
+        :return: DataArray, same as recordings where activations have been replaced with dprime values
+        '''
+
         def mean_var(neuron):
             mean, var = np.mean(neuron.values), np.var(neuron.values)
             return mean, var
@@ -387,6 +398,34 @@ class _Moeller2017(BenchmarkBase):
         voxel = rng.choice(voxels)
         x, y = voxel.voxel_x, voxel.voxel_y
         return x, y
+
+    def _collect_target_assembly(self):
+        '''
+        TODO make sure assembly.stimulus_set corresponds to target_stimulus_class
+        TODO stimulus set FP
+        TODO stimulus set training decoder
+        TODO full list of objects
+        TODO make sure assembly has source attribute --> ceiling??
+        Load Data from path + subselect as specified by Experiment
+
+        :return: DataAssembly
+        '''
+        STIMULUS_CLASS_DICT = {
+            'faces': ['faces'],  # 32; 6 expression each
+            'objects': [],  # TODO 28; 3 viewing angles each
+            'non_face_objects_eliciting_FP_response_plus_faces': ['apples_bw', 'citrus_fruits_bw', 'teapots_bw',
+                                                                  'clocks_bw', 'faces_bw'],  # 15; 3/cats
+            'abstract_faces': ['face_cartoons', 'face_linedrawings', 'face_mooneys', 'face_silhouettes'],  # 16; 4/cat
+            'abstract_houses': ['house_cartoons', 'house_linedrawings', 'house_silhouettes', 'face_mooneys',
+                                'face_mooneys_inverted']  # 20; 4/cat
+        }
+
+        assembly = self._load_assembly()
+
+        target_stimulus_class = STIMULUS_CLASS_DICT[self._stimulus_class]
+        target_assembly = assembly.multisel(object_name=target_stimulus_class)  # TODO
+        # TODO add object_ID & image_ID coords; image_ID = expression or viewing angle
+        return target_assembly
 
     @staticmethod
     def _load_assembly():
