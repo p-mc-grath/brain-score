@@ -54,12 +54,17 @@ MUSCIMOL_PARAMETERS = {
 class Afraz2015OptogeneticSelectiveDeltaAccuracy(BenchmarkBase):
     def __init__(self):
         self._logger = logging.getLogger(fullname(self))
-        self._fitting_stimuli, self._selectivity_stimuli, test_stimuli = load_stimuli()
+        gender_stimuli, self._selectivity_stimuli = load_stimuli()
+        # "In practice, we first trained the animals on a fixed set of 400 images (200 males and 200 females)."
+        # "Once trained, we tested the animals’ performance on freshly generated sets of 400 images to confirm
+        #  that they could generalize the learning to novel stimuli"
+        self._fitting_stimuli, test_stimuli = split_train_test(gender_stimuli, random_state=RandomState(1),
+                                                               num_training=400, num_testing=400)
         self._assembly = collect_site_deltas()
         self._assembly.attrs['stimulus_set'] = test_stimuli
         self._metric = SignificantCorrelation(x_coord='face_detection_index_dprime', ignore_nans=True)
         super(Afraz2015OptogeneticSelectiveDeltaAccuracy, self).__init__(
-            identifier='esteky.Afraz2015.optogenetics-selective_delta_accuracy',
+            identifier='dicarlo.Afraz2015.optogenetics-selective_delta_accuracy',
             ceiling_func=None,
             version=1, parent='IT',
             bibtex=BIBTEX)
@@ -116,11 +121,16 @@ class Afraz2015OptogeneticSelectiveDeltaAccuracy(BenchmarkBase):
 class Afraz2015OptogeneticAccuracy(BenchmarkBase):
     def __init__(self):
         self._logger = logging.getLogger(fullname(self))
-        self._fitting_stimuli, self._selectivity_stimuli, test_stimuli = load_stimuli()
+        gender_stimuli, self._selectivity_stimuli = load_stimuli()
+        # "In practice, we first trained the animals on a fixed set of 400 images (200 males and 200 females)."
+        # "Once trained, we tested the animals’ performance on freshly generated sets of 400 images to confirm
+        #  that they could generalize the learning to novel stimuli"
+        self._fitting_stimuli, test_stimuli = split_train_test(gender_stimuli, random_state=RandomState(1),
+                                                               num_training=400, num_testing=400)
         self._assembly = collect_delta_overall_accuracy()
         self._assembly.attrs['stimulus_set'] = test_stimuli
         super(Afraz2015OptogeneticAccuracy, self).__init__(
-            identifier='esteky.Afraz2015.optogenetics-accuracy',
+            identifier='dicarlo.Afraz2015.optogenetics-accuracy',
             ceiling_func=None,
             version=1, parent='IT',
             bibtex=BIBTEX)
@@ -242,11 +252,17 @@ def stack_multiindex(assembly, new_dim):
 class Afraz2015MuscimolDeltaAccuracy(BenchmarkBase):
     def __init__(self):
         self._logger = logging.getLogger(fullname(self))
-        self._fitting_stimuli, self._selectivity_stimuli, test_stimuli = load_stimuli()
+        gender_stimuli, self._selectivity_stimuli = load_stimuli()
+        # "In practice, we first trained the animals on a fixed set of 400 images (200 males and 200 females)."
+        # "Once trained, we tested the animals’ performance on freshly generated sets of 400 images to confirm
+        #  that they could generalize the learning to novel stimuli"
+        # "For muscimol experiments, because the test blocks were shorter, smaller image sets (200 images) were used."
+        self._fitting_stimuli, test_stimuli = split_train_test(gender_stimuli, random_state=RandomState(1),
+                                                               num_training=400, num_testing=200)
         self._assembly = muscimol_delta_overall_accuracy()
         self._assembly.attrs['stimulus_set'] = test_stimuli
         super(Afraz2015MuscimolDeltaAccuracy, self).__init__(
-            identifier='esteky.Afraz2015.muscimol-delta_accuracy',
+            identifier='dicarlo.Afraz2015.muscimol-delta_accuracy',
             ceiling_func=None,
             version=1, parent='IT',
             bibtex=BIBTEX)
@@ -433,16 +449,20 @@ def determine_selectivity(recordings):
 
 
 def load_stimuli():
-    # stimuli
-    # TODO: separate train/test
-    # TODO All images (60) -- used for testing
+    """ Retrieve gender and selectivity (object/face) stimuli """
     stimuli = collect_stimuli()
     gender_stimuli = stimuli[stimuli['category'].isin(['male', 'female'])]
     selectivity_stimuli = stimuli[stimuli['category'].isin(['object', 'face'])]
     gender_stimuli['image_label'] = gender_stimuli['category']
-    test_stimuli = gender_stimuli.sample(n=60, random_state=1)
-
     gender_stimuli.identifier = stimuli.identifier + '-gender'
     selectivity_stimuli.identifier = stimuli.identifier + '-selectivity'
+    return gender_stimuli, selectivity_stimuli
+
+
+def split_train_test(stimuli, random_state, num_training, num_testing):
+    train_stimuli = stimuli.sample(n=num_training, replace=False, random_state=random_state)
+    remaining_stimuli = stimuli[~stimuli['image_id'].isin(train_stimuli['image_id'])]
+    test_stimuli = remaining_stimuli.sample(n=num_testing, replace=False, random_state=random_state)
+    train_stimuli.identifier = stimuli.identifier + '-train'
     test_stimuli.identifier = stimuli.identifier + '-test'
-    return gender_stimuli, selectivity_stimuli, test_stimuli
+    return train_stimuli, test_stimuli
