@@ -80,6 +80,7 @@ def collect_delta_overall_accuracy():
                        - group['value'][group['aggregation'] == 'mean'].values)[0])
     data.loc[data['aggregation'] == 'positive_error', 'value'] = errors.values
     data.loc[data['aggregation'] == 'positive_error', 'aggregation'] = 'error'
+    data.loc[data['aggregation'] == 'mean', 'aggregation'] = 'center'
 
     # package into xarray
     assembly = DataAssembly(data['value'], coords={
