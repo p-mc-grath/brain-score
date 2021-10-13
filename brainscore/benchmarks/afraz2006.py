@@ -55,7 +55,7 @@ class Afraz2006(BenchmarkBase):
     def __init__(self):
         self._logger = logging.getLogger(fullname(self))
         self._assembly, self._fitting_stimuli = self._load_assembly()
-        self._metric = DifferenceOfCorrelations()
+        self._metric = DifferenceOfCorrelations(correlation_variable='face_selectivity')
         super(Afraz2006, self).__init__(
             identifier='esteky.Afraz2006-selective_psychometric_shift',
             ceiling_func=None,
@@ -129,6 +129,8 @@ class Afraz2006(BenchmarkBase):
         self.attach_face_selectivities(psychometric_shifts, face_selectivities[:subselect])
 
         # compare
+        psychometric_shifts = psychometric_shifts[{'site': [  # ignore nan values
+            not np.isnan(face_selectivity) for face_selectivity in psychometric_shifts['face_selectivity'].values]}]
         score = self._metric(psychometric_shifts, self._assembly)
         return score
 
