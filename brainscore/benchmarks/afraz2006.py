@@ -8,6 +8,7 @@ from tqdm import tqdm
 from xarray import DataArray
 
 from brainio.assemblies import merge_data_arrays, walk_coords, DataAssembly
+from brainscore.metrics.difference_of_correlations import DifferenceOfCorrelations
 from packaging.afraz2006 import train_test_stimuli, collect_assembly
 from brainscore.benchmarks import BenchmarkBase
 from brainscore.metrics.significant_match import SignificantCorrelation
@@ -54,7 +55,7 @@ class Afraz2006(BenchmarkBase):
     def __init__(self):
         self._logger = logging.getLogger(fullname(self))
         self._assembly, self._fitting_stimuli = self._load_assembly()
-        self._metric = SignificantCorrelation(x_coord='face_selectivity', ignore_nans=True)
+        self._metric = DifferenceOfCorrelations()
         super(Afraz2006, self).__init__(
             identifier='esteky.Afraz2006-selective_psychometric_shift',
             ceiling_func=None,

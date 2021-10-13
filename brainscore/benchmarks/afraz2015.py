@@ -10,7 +10,8 @@ from brainio.assemblies import merge_data_arrays, DataAssembly, walk_coords, arr
 from brainscore.benchmarks import BenchmarkBase
 from brainscore.benchmarks.afraz2006 import mean_var
 from brainscore.metrics import Score
-from brainscore.metrics.significant_match import SignificantCorrelation
+from brainscore.metrics.difference_of_correlations import DifferenceOfCorrelations
+from brainscore.metrics.difference_of_fractions import DifferenceOfFractions
 from brainscore.model_interface import BrainModel
 from brainscore.utils import fullname
 from packaging.afraz2015 import muscimol_delta_overall_accuracy, collect_stimuli, collect_site_deltas, \
@@ -62,7 +63,7 @@ class Afraz2015OptogeneticSelectiveDeltaAccuracy(BenchmarkBase):
                                                                num_training=400, num_testing=400)
         self._assembly = collect_site_deltas()
         self._assembly.attrs['stimulus_set'] = test_stimuli
-        self._metric = SignificantCorrelation(x_coord='face_detection_index_dprime', ignore_nans=True)
+        self._metric = DifferenceOfCorrelations(correlation_variable='face_detection_index_dprime')
         super(Afraz2015OptogeneticSelectiveDeltaAccuracy, self).__init__(
             identifier='dicarlo.Afraz2015.optogenetics-selective_delta_accuracy',
             ceiling_func=None,
@@ -128,7 +129,9 @@ class Afraz2015OptogeneticAccuracy(BenchmarkBase):
         self._fitting_stimuli, test_stimuli = split_train_test(gender_stimuli, random_state=RandomState(1),
                                                                num_training=400, num_testing=400)
         self._assembly = collect_delta_overall_accuracy()
+        self._assembly = self._assembly.sel(visual_field='contra')  # ignore ipsilateral effects
         self._assembly.attrs['stimulus_set'] = test_stimuli
+        self._metric = DifferenceOfFractions()
         super(Afraz2015OptogeneticAccuracy, self).__init__(
             identifier='dicarlo.Afraz2015.optogenetics-accuracy',
             ceiling_func=None,
@@ -183,7 +186,17 @@ class Afraz2015OptogeneticAccuracy(BenchmarkBase):
         grouped_accuracy = self.group_accuracy(unperturbed_accuracy, site_accuracies)
 
         # compute score
-        score = self.metric(grouped_accuracy)
+        unperturbed_accuracy_candidate = grouped_accuracy.sel(laser_on=False).mean('presentation')
+        perturbed_accuracy_candidate = grouped_accuracy.sel(laser_on=True).mean()  # mean over everything at once
+        accuracy_delta_candidate = DataAssembly([unperturbed_accuracy_candidate, perturbed_accuracy_candidate],
+                                                coords={'performance': ['unperturbed', 'perturbed']},
+                                                dims=['performance'])
+        accuracy_delta_data = self._assembly.sel(aggregation='center')
+        accuracy_delta_data['performance'] = 'condition', ['unperturbed' if not laser_on else 'perturbed'
+                                                           for laser_on in accuracy_delta_data['laser_on'].values]
+        accuracy_delta_candidate.attrs['chance_performance'] = accuracy_delta_data.attrs['chance_performance'] = .5
+        accuracy_delta_candidate.attrs['maximum_performance'] = accuracy_delta_data.attrs['maximum_performance'] = 1.
+        score = self._metric(accuracy_delta_candidate, accuracy_delta_data)
         return score
 
     def group_accuracy(self, unperturbed_accuracy, site_accuracies):
@@ -196,24 +209,6 @@ class Afraz2015OptogeneticAccuracy(BenchmarkBase):
             unperturbed_accuracy[coord] = 'presentation', [None] * len(unperturbed_accuracy['presentation'])
         grouped_accuracy = xr.concat([site_accuracies, DataAssembly(unperturbed_accuracy)], dim='presentation')
         return DataAssembly(grouped_accuracy)  # make sure MultiIndex is built
-
-    def metric(self, grouped_accuracy):
-        # Typically, we would compare against packaged data with a metric here.
-        # For this dataset, we only have error bars and their significance, but we do not have the raw data
-        # that the significances are computed from.
-        # Because of that, we will _not_ compare candidate prediction against data here, but rather impose data
-        # characterizations on the candidate prediction. Specifically, we will check if:
-        # 1. behavioral accuracies in the non-suppressed ("image") and suppressed ("image+laser") conditions are
-        # significantly different, and
-        # 2. behavioral accuracy in the non-suppressed condition is significantly higher than with suppression
-        different = is_significantly_different(DataAssembly(grouped_accuracy), between='laser_on')
-        unperturbed_accuracy = grouped_accuracy.sel(laser_on=False).mean('presentation')
-        site_accuracies = grouped_accuracy.sel(laser_on=True).mean()  # mean over everything at once
-        unperturbed_accuracy_higher = unperturbed_accuracy > site_accuracies
-        score = different and unperturbed_accuracy_higher
-        score = Score([score], coords={'aggregation': ['center']}, dims=['aggregation'])
-        score.attrs['delta_accuracy'] = unperturbed_accuracy - site_accuracies
-        return score
 
     def site_accuracies(self, unperturbed_behavior, perturbed_behaviors):
         unperturbed_accuracy = per_image_accuracy(unperturbed_behavior)
