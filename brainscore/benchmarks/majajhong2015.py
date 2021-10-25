@@ -197,7 +197,7 @@ class DicarloMajajHong2015ITSpatialCorrelation(BenchmarkBase):
     def sample_array_locations(self, neuroid, seed=0):
         '''
         Generator: Sample Utah array-like portions from artificial model tissue and generate masks
-        :param neuroid: NeuroidAssembly.neuroid
+        :param neuroid: NeuroidAssembly.neuroid, has to contain tissue_x, tissue_y coords
         :param seed: random seed
         :return: list of masks in neuroid dimension of assembly, usage: assembly[mask] -> neuroids within one array
         '''

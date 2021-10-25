@@ -1,8 +1,10 @@
+import itertools
+
 from brainscore.utils import LazyLoad
 from tqdm import tqdm
 import numpy as np
 from sklearn.linear_model import LinearRegression
-from brainscore.metrics.inter_individual_stats_ceiling import InterIndividualStatisticsCeiling
+from brainscore.metrics import Metric
 from brainscore.benchmarks import BenchmarkBase
 from brainscore.model_interface import BrainModel
 from brainscore.metrics.accuracy import Accuracy
@@ -29,14 +31,14 @@ STIMULATION_PARAMETERS = {
     'stimulation_duration_ms': 200
 }
 
-DPRIME_THRESHOLD_SELECTIVITY = .66  # equiv to .5 in monkey
-DPRIME_THRESHOLD_FACE_PATCH = .85  # equiv to .65 in monkey
+DPRIME_THRESHOLD_SELECTIVITY = .66  # equivalent to .5 in monkey, see Lee et al. 2020
+DPRIME_THRESHOLD_FACE_PATCH = .85  # equivalent to .65 in monkey, see Lee et al. 2020
 
 
 class _Moeller2017(BenchmarkBase):
 
-    def __init__(self, stimulus_class, perturbation_location, identifier,
-                 metric=PerformanceSimilarity, performance_measure=Accuracy):
+    def __init__(self, stimulus_class: str, perturbation_location: str, identifier: str,
+                 metric: Metric, performance_measure):
         '''
         Perform a same vs different identity judgement task on the given dataset
             with and without Microstimulation in the specified location.
@@ -47,11 +49,11 @@ class _Moeller2017(BenchmarkBase):
         Within each dataset, the number of instances per category is equalized. As is the number of different
         representations (faces: expressions, object: viewing angles) per instance.
 
-        :param stimulus_class: string: ['faces', 'objects', 'non_face_objects_eliciting_FP_response_plus_faces',
+        :param stimulus_class: one of: ['faces', 'objects', 'non_face_objects_eliciting_face_patch_response_plus_faces',
                                         'abstract_faces', 'abstract_houses']
-        :param perturbation_location: string: ['within_facepatch', 'outside_facepatch']
-        :param identifier: string: benchmark id
-        :param metric: i: performances along multiple dimensions of 2 instances | o: Score object, evaluating similarity
+        :param perturbation_location: one of: ['within_facepatch', 'outside_facepatch']
+        :param identifier: benchmark id
+        :param metric: in: performances along multiple dimensions of 2 instances | out: Score object, evaluating similarity
         :param performance_measure: taking behavioral data, returns performance w.r.t. each dimension
         '''
         super().__init__(
@@ -67,8 +69,8 @@ class _Moeller2017(BenchmarkBase):
 
         self._target_assembly = self._collect_target_assembly()
         self._stimulus_set = self._target_assembly.stimulus_set
-        self._stimulus_set_FP = self._target_assembly.stimulus_set_FP
-        self._stimulus_set_training = self._target_assembly.stimulus_set_training
+        self._stimulus_set_face_patch = self._target_assembly.stimulus_set_face_patch
+        self._training_stimuli = self._target_assembly.training_stimuli
 
         self._seed = 123
 
@@ -81,13 +83,14 @@ class _Moeller2017(BenchmarkBase):
                  Score.performance = performance aggregated per experiment
                  Score.raw_performance = performance per category
         '''
-        self._compute_perturbation_coordinates(candidate)
-        self._set_up_decoder(candidate)
+        self._compute_perturbation_coordinates(candidate)  # TODO move to modeltools
+        decoder = self._set_up_decoder(candidate)
 
         candidate.start_recording(recording_target='IT', time_bins=[(70, 170)])
         candidate_performance = []
         for perturbation in self._perturbations:
-            behavior = self._perform_task(candidate, perturbation=perturbation)
+            behavior = self._perform_task(candidate, perturbation=perturbation,
+                                          decoder=decoder)  # TODO move to modeltools
             performance = self._compute_performance(behavior)
             candidate_performance.append(performance)
         candidate_performance = merge_data_arrays(candidate_performance)
@@ -95,11 +98,11 @@ class _Moeller2017(BenchmarkBase):
         score = self._metric(candidate_performance, self._target_assembly)
         return score
 
-    def _perform_task(self, candidate: BrainModel, perturbation):
+    def _perform_task(self, candidate: BrainModel, perturbation: dict, decoder):
         '''
         Perturb model and compute behavior w.r.t. task
         :param candidate: BrainModel
-        :perturbation dict with keys: type, perturbation_parameters
+        :perturbation keys: type, perturbation_parameters
         :return: DataArray: values = choice, dims = [truth, current_pulse_mA, condition, object_name]
         '''
         candidate.perturb(perturbation=None, target='IT')  # reset
@@ -108,15 +111,15 @@ class _Moeller2017(BenchmarkBase):
 
         IT_recordings = candidate.look_at(self._stimulus_set)
 
-        behavior = self._compute_behavior(IT_recordings)
+        behavior = self._compute_behavior(IT_recordings, decoder)
         behavior['current_pulse_mA'] = behavior.dims[0], perturbation['perturbation_parameters']['current_pulse_mA']
         return behavior
 
-    def _compute_behavior(self, IT_recordings):
+    def _compute_behavior(self, IT_recordings: DataArray, decoder):
         '''
         Compute behavior of given IT recordings in a identity matching task,
             i.e. given two images of the same category judge if they depict an object of same or different identity
-        :param IT_recordings: DataArray:
+        :param IT_recordings:
             values: IT activation vectors
             dims:   object_name : list of strings, category
             coords: object_ID   : list of strings, object identity
@@ -127,12 +130,12 @@ class _Moeller2017(BenchmarkBase):
             coords: condition   : list of strings, ['same_id == 1, 'different_id'==0]
                     object_name : list of strings, category
         '''
-        samples = 500
+        samples = 500  # TODO why 500
         behavior_data = []
         for object_name in set(IT_recordings.object_name):
             recordings, conditions = self._sample_recordings(IT_recordings.sel(object_name=object_name),
                                                              samples=samples)
-            choices = self._decoder.predict(recordings)
+            choices = decoder.predict(recordings)
             behavior = DataArray(data=choices, dims='condition',
                                  coords={'truth': np.array(conditions) == 'same_id',
                                          'condition': ('truth', conditions),
@@ -142,10 +145,10 @@ class _Moeller2017(BenchmarkBase):
         behaviors = merge_data_arrays(behavior_data)
         return behaviors
 
-    def _compute_performance(self, behavior):
+    def _compute_performance(self, behavior: DataArray):
         '''
         Given performance measure and behavior, compute performance w.r.t. current_pulse_mA, condition, object name
-        :param behavior: DataArray:
+        :param behavior:
             values: choice,
             dims:   truth           : 'same_id'==1, 'different_id'==0
             coords: condition       : list of strings, ['same_id', 'different_id]
@@ -158,25 +161,25 @@ class _Moeller2017(BenchmarkBase):
                     current_pulse_mA: float
         '''
         performance_data = []
-        for object_name in set(behavior.object_name):
-            for current_pulse_mA in set(behavior.current_pulse_mA):
-                for condition in set(behavior.condition):
-                    performance = self._performance_measure(behavior.sel(current_pulse_mA=current_pulse_mA,
-                                                                         condition=condition,
-                                                                         object_name=object_name))
-                    performance_array = DataArray(data=performance, dims='condition',
-                                                  coords={'condition': condition,
-                                                          'object_name': ('condition', object_name),
-                                                          'current_pulse_mA': ('condition', current_pulse_mA)})
-                    performance_data.append(performance_array)
+        for object_name, current_pulse_mA, condition in itertools.product(set(behavior.object_name),
+                                                                          set(behavior.current_pulse_mA),
+                                                                          set(behavior.condition)):
+            performance = self._performance_measure(behavior.sel(current_pulse_mA=current_pulse_mA,
+                                                                 condition=condition,
+                                                                 object_name=object_name))
+            performance_array = DataArray(data=performance, dims='condition',
+                                          coords={'condition': condition,
+                                                  'object_name': ('condition', object_name),
+                                                  'current_pulse_mA': ('condition', current_pulse_mA)})
+            performance_data.append(performance_array)
 
         performances = merge_data_arrays(performance_data)
         return performances
 
-    def _set_up_perturbations(self, perturbation_location):
+    def _set_up_perturbations(self, perturbation_location: str):
         '''
         Create a list of dictionaries, each containing the parameters for one perturbation
-        :param: perturbation_location: string ['within_facepatch','outside_facepatch']
+        :param: perturbation_location: one of ['within_facepatch','outside_facepatch']
         :return: list of dict, each containing parameters for one perturbation
         '''
         self._perturbation_location = perturbation_location
@@ -193,14 +196,14 @@ class _Moeller2017(BenchmarkBase):
             perturbation_list.append(perturbation_dict)
         return perturbation_list
 
-    def _set_up_decoder(self, candidate):
+    def _set_up_decoder(self, candidate: BrainModel):
         '''
         Fit a linear regression between the recordings of the training stimuli and the ground truth
-        Assign to self._decoder
+        :return: trained linear regressor
         '''
         candidate.start_recording()
-        recordings = candidate.look_at(self._stimulus_set_training)
-        samples = 500
+        recordings = candidate.look_at(self._training_stimuli)
+        samples = 500  # TODO why 500
 
         stimulus_set = truth = []
         for object_name in set(recordings.object_name):
@@ -210,14 +213,13 @@ class _Moeller2017(BenchmarkBase):
             truth += np.array(conditions) == 'same_id'
         stimulus_set = np.vstack(stimulus_set)
 
-        self._decoder = LinearRegression()
-        self._decoder.fit(stimulus_set, truth)
+        return LinearRegression().fit(stimulus_set, truth)
 
-    def _sample_recordings(self, category_pool, samples=500):
+    def _sample_recordings(self, category_pool: DataArray, samples=500):  # TODO why 500
         '''
         Create an array of randomly sampled recordings, each line is one task, i.e. two recordings which are to be
         judged same vs. different ID
-        :param category_pool: DataArray: Model IT recordings, assumed be from one category only
+        :param category_pool: Model IT recordings, assumed be from one category only
         :param samples: int: number of samples
         :return: array (samples x length of two concatenated recordings), each line contains two recordings
                  ground truth, for each line in array, specifying if the two recordings belong to the same/different ID
@@ -228,14 +230,14 @@ class _Moeller2017(BenchmarkBase):
 
         sampled_recordings = np.full((samples, recording_size * 2), np.nan)
         for i, (random_idx_same, random_idx_different) in enumerate(random_indeces):
-            # 'same_id': object_id ==, image_id!=
+            # condition 'same_id': object_id same between recording one and two, image_id different between recording one and two
             image_one_same = category_pool[random_idx_same]
             sampled_recordings[i, :recording_size] = image_one_same.values
             sampled_recordings[i, recording_size:] = rng.choice(category_pool.where(
                 category_pool.object_id == image_one_same.object_id and
                 category_pool.image_id != image_one_same.image_id))
 
-            # 'different_id': object_id !=
+            # condition 'different_id': object_id different between recording one and two
             image_one_diff = category_pool[random_idx_different]
             sampled_recordings[i + samples, :recording_size] = image_one_diff.values
             sampled_recordings[i + samples, recording_size:] = rng.choice(category_pool.where(
@@ -244,17 +246,18 @@ class _Moeller2017(BenchmarkBase):
         conditions = ['same_id'] * samples + ['different_id'] * samples
         return sampled_recordings, conditions
 
-    def _compute_perturbation_coordinates(self, candidate):
+    def _compute_perturbation_coordinates(self, candidate: BrainModel):
         '''
         Save stimulation coordinates (x,y) to self._perturbation_coordinates
         :param candidate: BrainModel
         '''
         candidate.start_recording('IT', time_bins=[(50, 100)])
-        recordings = candidate.look_at(self._stimulus_set_FP)  # vs _training_assembly
+        recordings = candidate.look_at(self._stimulus_set_face_patch)  # vs _training_assembly
 
         # 1 smooth spatial pattern by smoothing activity with gaussian kernel 1mm
         # 2 voxelize
-        recordings_voxelized = self._spatial_smoothing(recordings, fwhm=1, res=.5)
+        recordings_voxelized = self._spatial_smoothing(recordings, fwhm=1,
+                                                       res=.5)  # move to modeltools candidate.start_recording('IT', technique='fMRI', ...)
 
         # 3. compute face selectivity
         face_selectivities_voxel = self._determine_face_selectivity(recordings_voxelized)
@@ -263,17 +266,18 @@ class _Moeller2017(BenchmarkBase):
         if self._perturbation_location == 'within_facepatch':
             x, y = self._get_purity_center(face_selectivities_voxel)
         elif self._perturbation_location == 'outside_facepatch':
-            x, y = self._sample_outside_FP(face_selectivities_voxel)
+            x, y = self._sample_outside_face_patch(face_selectivities_voxel)
         else:
             raise KeyError
 
         self._perturbation_coordinates = (x, y)
 
-    def _spatial_smoothing(self, assembly, fwhm=1., res=0.5):
+    @staticmethod
+    def _spatial_smoothing(assembly: DataArray, fwhm=1., res=0.5):
         """
-        Adapted from Hyo's 2020 paper code
+        Adapted from Lee et al. 2020 code, not public
         Applies 2D Gaussian to tissue activations. Aggregates Voxels from tissue.
-        :param DataArray,
+        :param assembly,
             values: Activations
             dims:   neuroid_id
                         coords: tissue_x: x coordinates
@@ -286,7 +290,7 @@ class _Moeller2017(BenchmarkBase):
 
         def _get_grid_coord():
             """
-            Adapted from Hyo's 2020 paper code
+            Adapted from Lee et al. 2020 code, not public
             Returns coordinates of grid with width of 0.5
             """
             x = x.reshape(len(x), 1)
@@ -320,11 +324,11 @@ class _Moeller2017(BenchmarkBase):
         return features_smoothed,
 
     @staticmethod
-    def _get_purity_center(selectivity_assembly, radius=1):
+    def _get_purity_center(selectivity_assembly: DataArray, radius=1):
         '''
-        Adapted from Hyo's 2020 paper code
+        Adapted from Lee et al. 2020 code, not public
         Computes the voxel of the selectivity map with the highest purity
-        :param: selectivity_assembly: DataArray
+        :param: selectivity_assembly:
             dims: 'neuroid_id'
                     coords:
                         voxel_x: voxel coordinate
@@ -349,7 +353,7 @@ class _Moeller2017(BenchmarkBase):
         return center_x, center_y
 
     @staticmethod
-    def _determine_face_selectivity(recordings):
+    def _determine_face_selectivity(recordings: DataArray):
         '''
         Determines face selectivity of each neuroid
         :param recordings: DataArray
@@ -360,7 +364,7 @@ class _Moeller2017(BenchmarkBase):
             mean, var = np.mean(neuron.values), np.var(neuron.values)
             return mean, var
 
-        assert (recordings >= 0).all()
+        assert (recordings >= 0).all(), 'selectivities must be positive'
 
         selectivities = []
         for neuroid_id in tqdm(recordings['neuroid_id'].values, desc='neuron face dprime'):
@@ -376,14 +380,14 @@ class _Moeller2017(BenchmarkBase):
         selectivity_array.data = selectivities
         return selectivity_array
 
-    def _sample_outside_FP(self, selectivity_assembly, radius=2):
+    def _sample_outside_face_patch(self, selectivity_assembly: DataArray, radius=2):
         '''
         Sample one voxel outside of face patch
         1. make a list of voxels where neither the voxel nor its close neighbors are in a face patch
         2. randomly sample from list
         :param selectivity_assembly:
         :param radius: determining the neighborhood size in mm of each voxel that cannot be selective
-        :return: x, y location of voxel outside FP
+        :return: x, y location of voxel outside face_patch
         '''
         not_selective_voxels = selectivity_assembly[selectivity_assembly.values < DPRIME_THRESHOLD_SELECTIVITY]
         voxels = []
@@ -402,7 +406,7 @@ class _Moeller2017(BenchmarkBase):
     def _collect_target_assembly(self):
         '''
         TODO make sure assembly.stimulus_set corresponds to target_stimulus_class
-        TODO stimulus set FP
+        TODO stimulus set face_patch
         TODO stimulus set training decoder
         TODO full list of objects
         TODO make sure assembly has source attribute --> ceiling??
@@ -413,8 +417,8 @@ class _Moeller2017(BenchmarkBase):
         STIMULUS_CLASS_DICT = {
             'faces': ['faces'],  # 32; 6 expression each
             'objects': [],  # TODO 28; 3 viewing angles each
-            'non_face_objects_eliciting_FP_response_plus_faces': ['apples_bw', 'citrus_fruits_bw', 'teapots_bw',
-                                                                  'clocks_bw', 'faces_bw'],  # 15; 3/cats
+            'non_face_objects_eliciting_face_patch_response_plus_faces': ['apples_bw', 'citrus_fruits_bw', 'teapots_bw',
+                                                                          'clocks_bw', 'faces_bw'],  # 15; 3/cats
             'abstract_faces': ['face_cartoons', 'face_linedrawings', 'face_mooneys', 'face_silhouettes'],  # 16; 4/cat
             'abstract_houses': ['house_cartoons', 'house_linedrawings', 'house_silhouettes', 'face_mooneys',
                                 'face_mooneys_inverted']  # 20; 4/cat
@@ -440,64 +444,69 @@ class _Moeller2017(BenchmarkBase):
         return assembly
 
 
-def Moeller2017Exp1():
+def Moeller2017Experiment1():
     '''
-    EXP1:
     Stimulate face patch during face identification
     '''
     return _Moeller2017(stimulus_class='faces',
                         perturbation_location='within_facepatch',
-                        identifier='dicarlo.Moeller2017-Experiment_1')
+                        identifier='dicarlo.Moeller2017-Experiment_1',
+                        metric=PerformanceSimilarity(),
+                        performance_measure=Accuracy())
 
 
-def Moeller2017Exp2():
+def Moeller2017Experiment2():
     '''
     TODO  very unclean
-    EXP2:
     i: Stimulate outside of the face patch during face identification
     ii: Stimulate face patch during object identification
     '''
 
-    class _Moeller2017Exp2(BenchmarkBase):
+    class _Moeller2017Experiment2(BenchmarkBase):
         def __init__(self):
             super().__init__(
                 identifier='dicarlo.Moeller2017-Experiment_2', ceiling_func=None, version=1, parent='IT', bibtex=BIBTEX)
             self.benchmark1 = _Moeller2017(stimulus_class='faces', perturbation_location='outside_facepatch',
-                                           identifier='dicarlo.Moeller2017-Experiment_2i')
+                                           identifier='dicarlo.Moeller2017-Experiment_2i',
+                                           metric=PerformanceSimilarity(), performance_measure=Accuracy())
             self.benchmark2 = _Moeller2017(stimulus_class='objects', perturbation_location='within_facepatch',
-                                           identifier='dicarlo.Moeller2017-Experiment_2ii')
+                                           identifier='dicarlo.Moeller2017-Experiment_2ii',
+                                           metric=PerformanceSimilarity(), performance_measure=Accuracy())
 
         def __call__(self, candidate):
             return self.benchmark1(candidate), self.benchmark2(candidate)
 
-    return _Moeller2017Exp2()
+    return _Moeller2017Experiment2()
 
 
-def Moeller2017Exp3():
+def Moeller2017Experiment3():
     '''
-    EXP3:
     Stimulate face patch during face & non-face object eliciting patch response identification
     '''
-    return _Moeller2017(stimulus_class='non_face_objects_eliciting_FP_response_plus_faces',
+    return _Moeller2017(stimulus_class='non_face_objects_eliciting_face_patch_response_plus_faces',
                         perturbation_location='within_facepatch',
-                        identifier='dicarlo.Moeller2017-Experiment_3')
+                        identifier='dicarlo.Moeller2017-Experiment_3',
+                        metric=PerformanceSimilarity(),
+                        performance_measure=Accuracy())
 
 
-def Moeller2017Exp4a():
+def Moeller2017Experiment4a():
     '''
-    EXP4a:
     Stimulate face patch during abstract face identification
     '''
     return _Moeller2017(stimulus_class='abstract_faces',
                         perturbation_location='within_facepatch',
-                        identifier='dicarlo.Moeller2017-Experiment_4a')
+                        identifier='dicarlo.Moeller2017-Experiment_4a',
+                        metric=PerformanceSimilarity(),
+                        performance_measure=Accuracy())
 
 
-def Moeller2017Exp4b():
+def Moeller2017Experiment4b():
     '''
-    EXP4b:
     Stimulate face patch during face & abstract houses identification
     '''
     return _Moeller2017(stimulus_class='abstract_houses',
                         perturbation_location='within_facepatch',
-                        identifier='dicarlo.Moeller2017-Experiment_4b')
+                        identifier='dicarlo.Moeller2017-Experiment_4b',
+                        metric=PerformanceSimilarity(),
+                        performance_measure=Accuracy())
