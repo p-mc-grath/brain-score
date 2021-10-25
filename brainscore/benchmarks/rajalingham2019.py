@@ -4,6 +4,7 @@ import numpy as np
 import xarray as xr
 import pandas as pd
 import warnings
+from numpy.random import RandomState
 from pandas import DataFrame
 from scipy.spatial.distance import squareform, pdist
 from scipy.stats import pearsonr
@@ -11,10 +12,11 @@ from tqdm import tqdm
 from xarray import DataArray
 
 import brainscore
+from model_tools.brain_transformation.tissue.neural_perturbation import MuscimolInjection
 from brainio.assemblies import merge_data_arrays, walk_coords, DataAssembly, array_is_element
 from brainscore.benchmarks import BenchmarkBase
 from brainscore.metrics import Score
-from brainscore.metrics.behavior_differences import BehaviorDifferences
+from brainscore.metrics.behavior_differences import DeficitPredictionTask, DeficitPredictionObject
 from brainscore.metrics.image_level_behavior import _o2
 from brainscore.metrics.inter_individual_stats_ceiling import InterIndividualStatisticsCeiling
 from brainscore.metrics.significant_match import SignificantCorrelation
@@ -52,9 +54,16 @@ BIBTEX = """@article{RAJALINGHAM2019493,
                 abstract = {Extensive research suggests that the inferior temporal (IT) population supports visual object recognition behavior. However, causal evidence for this hypothesis has been equivocal, particularly beyond the specific case of face-selective subregions of IT. Here, we directly tested this hypothesis by pharmacologically inactivating individual, millimeter-scale subregions of IT while monkeys performed several core object recognition subtasks, interleaved trial-by trial. First, we observed that IT inactivation resulted in reliable contralateral-biased subtask-selective behavioral deficits. Moreover, inactivating different IT subregions resulted in different patterns of subtask deficits, predicted by each subregion’s neuronal object discriminability. Finally, the similarity between different inactivation effects was tightly related to the anatomical distance between corresponding inactivation sites. Taken together, these results provide direct evidence that the IT cortex causally supports general core object recognition and that the underlying IT coding dimensions are topographically organized.}
                 }"""
 
+# "Each inactivation session began with a single focal microinjection of 1ml of muscimol
+# (5mg/mL, Sigma Aldrich) at a slow rate (100nl/min) via a 30-gauge stainless-steel cannula at
+# the targeted site in ventral IT."
+MUSCIMOL_PARAMETERS = {
+    'amount_microliter': 1
+}
+
 
 class _Rajalingham2019(BenchmarkBase):
-    def __init__(self, identifier, metric):
+    def __init__(self, identifier, metric, ceiling_func=None, num_sites=9):
         self._target_assembly = collect_assembly()
         self._training_stimuli = brainscore.get_stimulus_set('dicarlo.hvm')
         self._training_stimuli['image_label'] = self._training_stimuli['object_name']
@@ -62,19 +71,13 @@ class _Rajalingham2019(BenchmarkBase):
         self._training_stimuli = self._training_stimuli[self._training_stimuli['object_name'].isin(
             self._target_assembly.stimulus_set['object_name'])]
         self._test_stimuli = self._target_assembly.stimulus_set
-        # "Each inactivation session began with a single focal microinjection of 1ml of muscimol
-        # (5mg/mL, Sigma Aldrich) at a slow rate (100nl/min) via a 30-gauge stainless-steel cannula at
-        # the targeted site in ventral IT."
-        self.perturbation = {'type': BrainModel.Perturbation.muscimol,
-                             'target': 'IT',
-                             'perturbation_parameters': {'amount_microliter': 1,
-                                                         'location': None}}
 
+        self._num_sites = num_sites
         self._metric = metric
         self._logger = logging.getLogger(fullname(self))
         super(_Rajalingham2019, self).__init__(
             identifier=identifier,
-            ceiling_func=None,
+            ceiling_func=ceiling_func,
             version=1, parent='IT',
             bibtex=BIBTEX)
 
@@ -91,26 +94,20 @@ class _Rajalingham2019(BenchmarkBase):
         # and the recovery or post-control session (2 days after injection)"
         # --> we here front-load one control session and then run many inactivation sessions
         # control
-        unperturbed_behavior = self.perform_task(candidate, perturbation=None)
+        unperturbed_behavior = self._perform_task_unperturbed(candidate)
 
         # silencing sessions
         behaviors = [unperturbed_behavior]
         # "We varied the location of microinjections to randomly sample the ventral surface of IT
         # (from approximately + 8mm AP to approx + 20mm AP)."
         # stay between [0, 10] since that is the extent of the tissue
-        muscimol_spread = 1.17  # TODO remove 5 lines ?? or push
-        spacing_factor = 1
-        injection_locations = np.random.rand(300) * (
-                10 - muscimol_spread * spacing_factor)  # self.sample_grid_points([2, 2], [8, 8], num_x=4, num_y=4)
-        injection_locations = injection_locations[injection_locations > muscimol_spread * spacing_factor]
-        injection_locations = injection_locations[:100]
-        injection_locations = injection_locations.reshape((50, 2))
-        for site, injection_location in enumerate(injection_locations):
-            perturbation = self.perturbation
-            perturbation['perturbation_parameters']['location'] = injection_location
-            perturbation['site_number'] = site
 
-            perturbed_behavior = self.perform_task(candidate, perturbation=perturbation)
+        for site, injection_location in enumerate(self._sample_injection_locations()):
+            perturbation_parameters = {**MUSCIMOL_PARAMETERS,
+                                       **{'location': injection_location}}
+            perturbed_behavior = self._perform_task_perturbed(candidate,
+                                                              perturbation_parameters=perturbation_parameters,
+                                                              site_number=site)
             behaviors.append(perturbed_behavior)
 
         behaviors = merge_data_arrays(behaviors)
@@ -118,12 +115,6 @@ class _Rajalingham2019(BenchmarkBase):
 
         score = self._metric(behaviors, self._target_assembly)
         return score
-
-    def perform_task(self, candidate: BrainModel, perturbation):
-        if perturbation is None:
-            return self._perform_task_unperturbed(candidate)
-        else:
-            return self._perform_task_perturbed(candidate, perturbation)
 
     def _perform_task_unperturbed(self, candidate: BrainModel):
         candidate.perturb(perturbation=None, target='IT')  # reset
@@ -133,22 +124,30 @@ class _Rajalingham2019(BenchmarkBase):
 
         return behavior
 
-    def _perform_task_perturbed(self, candidate: BrainModel, perturbation):
+    def _perform_task_perturbed(self, candidate: BrainModel, perturbation_parameters, site_number):
         candidate.perturb(perturbation=None, target='IT')  # reset
-        candidate.perturb(perturbation=perturbation['type'],
-                          target=perturbation['target'],
-                          perturbation_parameters=perturbation['perturbation_parameters'])
+        candidate.perturb(perturbation=BrainModel.Perturbation.muscimol,
+                          target='IT',
+                          perturbation_parameters=perturbation_parameters)
         behavior = candidate.look_at(self._test_stimuli)
 
         behavior = behavior.expand_dims('injected').expand_dims('site')
         behavior['injected'] = [True]
-        behavior['site_iteration'] = 'site', [perturbation['site_number']]
-        behavior['site_x'] = 'site', [perturbation['perturbation_parameters']['location'][0]]
-        behavior['site_y'] = 'site', [perturbation['perturbation_parameters']['location'][1]]
-        behavior['site_z'] = 'site', [0]  # [perturbation['perturbation_parameters']['location'][2]]
+        behavior['site_iteration'] = 'site', [site_number]
+        behavior['site_x'] = 'site', [perturbation_parameters['location'][0]]
+        behavior['site_y'] = 'site', [perturbation_parameters['location'][1]]
+        behavior['site_z'] = 'site', [0]
         behavior = type(behavior)(behavior)  # make sure site and injected are indexed
 
         return behavior
+
+    def _sample_injection_locations(self):
+        border_area = MuscimolInjection()._cov * 1
+        injection_locations = np.random.rand(self._num_sites * 10) * (10 - border_area)
+        injection_locations = injection_locations[injection_locations > border_area]
+        injection_locations = injection_locations[:self._num_sites * 2]
+        injection_locations = injection_locations.reshape((self._num_sites, 2))
+        return injection_locations
 
     @staticmethod
     def align_task_names(behaviors):
@@ -166,13 +165,31 @@ class _Rajalingham2019(BenchmarkBase):
                                      np.linspace(low[1], high[1], num_y))
         return np.stack((grid_x.flatten(), grid_y.flatten()), axis=1)  # , np.zeros(num_x * num_y) for empty z dimension
 
+    def sample_points(self, low, high, num):
+        assert len(low) == len(high) == 2
+        random_state = RandomState(0)
+        points_x = random_state.uniform(low=low[0], high=high[0], size=num)
+        points_y = random_state.uniform(low=low[1], high=high[1], size=num)
+        return np.stack((points_x, points_y), axis=1)
 
-def Rajalingham2019():
-    metric = BehaviorDifferences()
-    return _Rajalingham2019(identifier='dicarlo.Rajalingham2019-deficit_statistics', metric=metric)
+
+def Rajalingham2019DeficitPredictionTask():
+    metric = DeficitPredictionTask()
+    return _Rajalingham2019(identifier='dicarlo.Rajalingham2019-deficit_prediction_task',
+                            # num_sites=100,  # TODO
+                            metric=metric,
+                            ceiling_func=None,  # TODO
+                            )
 
 
-def DicarloRajalingham2019SpatialDeficits():
+def Rajalingham2019DeficitPredictionObject():
+    metric = DeficitPredictionObject()
+    return _Rajalingham2019(identifier='dicarlo.Rajalingham2019-deficit_prediction_object',
+                            # num_sites=100,  # TODO
+                            metric=metric)
+
+
+def Rajalingham2019SpatialDeficits():
     metric = SpatialCharacterizationMetric()
     return _Rajalingham2019(identifier='dicarlo.Rajalingham2019.IT-spatial_deficit_similarity', metric=metric)
 
@@ -210,7 +227,9 @@ class SpatialCharacterizationMetric:
         candidate_statistic = self.compute_response_deficit_distance_candidate(candidate_assembly)
         target_statistic = self.compute_response_deficit_distance_target(target)
 
-        score = self._similarity_metric(target_statistic, candidate_statistic)
+        score = self._similarity_metric(candidate_statistic, target_statistic)
+        # score.attrs['target_statistic'] = target_statistic
+        score.attrs['candidate_assembly'] = candidate_assembly
         return score
 
     def compute_response_deficit_distance_target(self, target_assembly):

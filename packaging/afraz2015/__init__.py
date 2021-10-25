@@ -20,6 +20,7 @@ def collect_stimuli():
     stimulus_set = StimulusSet(stimulus_set)
     stimulus_set.image_paths = {row.image_id: image_directory / f"{row.image_id}.png"
                                 for _, row in stimulus_set.iterrows()}
+    stimulus_set.identifier = 'Afraz2015'
     assert all(Path(stimulus_set.get_image(image_id)).is_file() for image_id in stimulus_set['image_id'])
     assert set(stimulus_set['category']) == {'male', 'female', 'object', 'face'}
     assert set(stimulus_set['location']) == {'right', 'left'}
@@ -79,6 +80,7 @@ def collect_delta_overall_accuracy():
                        - group['value'][group['aggregation'] == 'mean'].values)[0])
     data.loc[data['aggregation'] == 'positive_error', 'value'] = errors.values
     data.loc[data['aggregation'] == 'positive_error', 'aggregation'] = 'error'
+    data.loc[data['aggregation'] == 'mean', 'aggregation'] = 'center'
 
     # package into xarray
     assembly = DataAssembly(data['value'], coords={

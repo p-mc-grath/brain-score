@@ -8,6 +8,7 @@ from tqdm import tqdm
 from xarray import DataArray
 
 from brainio.assemblies import merge_data_arrays, walk_coords, DataAssembly
+from brainscore.metrics.difference_of_correlations import DifferenceOfCorrelations
 from packaging.afraz2006 import train_test_stimuli, collect_assembly
 from brainscore.benchmarks import BenchmarkBase
 from brainscore.metrics.significant_match import SignificantCorrelation
@@ -54,7 +55,7 @@ class Afraz2006(BenchmarkBase):
     def __init__(self):
         self._logger = logging.getLogger(fullname(self))
         self._assembly, self._fitting_stimuli = self._load_assembly()
-        self._metric = SignificantCorrelation(x_coord='face_selectivity', ignore_nans=True)
+        self._metric = DifferenceOfCorrelations(correlation_variable='face_selectivity')
         super(Afraz2006, self).__init__(
             identifier='esteky.Afraz2006-selective_psychometric_shift',
             ceiling_func=None,
@@ -128,6 +129,8 @@ class Afraz2006(BenchmarkBase):
         self.attach_face_selectivities(psychometric_shifts, face_selectivities[:subselect])
 
         # compare
+        psychometric_shifts = psychometric_shifts[{'site': [  # ignore nan values
+            not np.isnan(face_selectivity) for face_selectivity in psychometric_shifts['face_selectivity'].values]}]
         score = self._metric(psychometric_shifts, self._assembly)
         return score
 
@@ -175,7 +178,10 @@ class Afraz2006(BenchmarkBase):
     def logistic_midpoint(self, logistic_params, midpoint=0.5, initial_guess=0):
         func = lambda x: logistic(x, *logistic_params) - midpoint
         solution = fsolve(func, initial_guess)[0]
-        assert np.isclose(logistic(solution, *logistic_params), midpoint)
+        fit_midpoint = logistic(solution, *logistic_params)
+        assert np.isclose(fit_midpoint, midpoint), f"Unable to find midpoint: " \
+                                                   f"{fit_midpoint} (with parameters {logistic_params}) " \
+                                                   f"is different from target midpoint {midpoint}"
         return solution
 
 

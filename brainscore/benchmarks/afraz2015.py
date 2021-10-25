@@ -1,17 +1,17 @@
 import logging
-
 import numpy as np
 import pingouin as pg
+import xarray as xr
 from numpy.random import RandomState
 from tqdm import tqdm
 from xarray import DataArray
 
-from brainio.assemblies import merge_data_arrays, DataAssembly, walk_coords
+from brainio.assemblies import merge_data_arrays, DataAssembly, walk_coords, array_is_element
 from brainscore.benchmarks import BenchmarkBase
 from brainscore.benchmarks.afraz2006 import mean_var
 from brainscore.metrics import Score
-from brainscore.metrics.significant_match import SignificantCorrelation
-from brainscore.metrics.transformations import standard_error_of_the_mean
+from brainscore.metrics.difference_of_correlations import DifferenceOfCorrelations
+from brainscore.metrics.difference_of_fractions import DifferenceOfFractions
 from brainscore.model_interface import BrainModel
 from brainscore.utils import fullname
 from packaging.afraz2015 import muscimol_delta_overall_accuracy, collect_stimuli, collect_site_deltas, \
@@ -33,16 +33,39 @@ BIBTEX = """@article {Afraz6730,
             journal = {Proceedings of the National Academy of Sciences}
         }"""
 
+OPTOGENETIC_PARAMETERS = {
+    # "The targeted cortex was injected with ∼6 μLof solution (at 0.1 μL/min rate)"
+    "amount_microliter": 6,
+    "rate_microliter_per_min": 0.1,
+    # "containing AAV-8 carrying CAG-ARCHT (5)"
+    "virus": "AAV-8_CAG-ARCHT",
+    # "Viral titer was ∼2 × 10^12 infectious units per mL"
+    "infectious_units_per_ml": 2E12,
+    # 200-ms-duration laser pulse
+    "laser_pulse_duration_ms": 200,
+}
+MUSCIMOL_PARAMETERS = {
+    # "1 μL of muscimol (5 mg/mL) was injected at 0.1 μL/min rate"
+    'amount_microliter': 1,
+    'mg_per_microliter': 5,
+    'rate_microliter_per_min': 0.1,
+}
+
 
 class Afraz2015OptogeneticSelectiveDeltaAccuracy(BenchmarkBase):
     def __init__(self):
         self._logger = logging.getLogger(fullname(self))
-        self._fitting_stimuli, self._selectivity_stimuli, test_stimuli = load_stimuli()
+        gender_stimuli, self._selectivity_stimuli = load_stimuli()
+        # "In practice, we first trained the animals on a fixed set of 400 images (200 males and 200 females)."
+        # "Once trained, we tested the animals’ performance on freshly generated sets of 400 images to confirm
+        #  that they could generalize the learning to novel stimuli"
+        self._fitting_stimuli, test_stimuli = split_train_test(gender_stimuli, random_state=RandomState(1),
+                                                               num_training=400, num_testing=400)
         self._assembly = collect_site_deltas()
         self._assembly.attrs['stimulus_set'] = test_stimuli
-        self._metric = SignificantCorrelation(x_coord='face_detection_index_dprime', ignore_nans=True)
+        self._metric = DifferenceOfCorrelations(correlation_variable='face_detection_index_dprime')
         super(Afraz2015OptogeneticSelectiveDeltaAccuracy, self).__init__(
-            identifier='esteky.Afraz2015.optogenetics-selective_delta_accuracy',
+            identifier='dicarlo.Afraz2015.optogenetics-selective_delta_accuracy',
             ceiling_func=None,
             version=1, parent='IT',
             bibtex=BIBTEX)
@@ -74,10 +97,7 @@ class Afraz2015OptogeneticSelectiveDeltaAccuracy(BenchmarkBase):
             self._logger.debug(f"Suppressing at {location}")
             candidate.perturb(perturbation=BrainModel.Perturbation.optogenetic_suppression,
                               target='IT', perturbation_parameters={
-                    # TODO
-                    'location': location,
-                    'amount_microliter': 1,  # FIXME
-                })
+                    **{'location': location}, **OPTOGENETIC_PARAMETERS})
             behavior = candidate.look_at(self._assembly.stimulus_set)
             behavior = behavior.expand_dims('site')
             behavior['site_iteration'] = 'site', [site]
@@ -102,12 +122,18 @@ class Afraz2015OptogeneticSelectiveDeltaAccuracy(BenchmarkBase):
 class Afraz2015OptogeneticAccuracy(BenchmarkBase):
     def __init__(self):
         self._logger = logging.getLogger(fullname(self))
-        self._fitting_stimuli, self._selectivity_stimuli, test_stimuli = load_stimuli()
+        gender_stimuli, self._selectivity_stimuli = load_stimuli()
+        # "In practice, we first trained the animals on a fixed set of 400 images (200 males and 200 females)."
+        # "Once trained, we tested the animals’ performance on freshly generated sets of 400 images to confirm
+        #  that they could generalize the learning to novel stimuli"
+        self._fitting_stimuli, test_stimuli = split_train_test(gender_stimuli, random_state=RandomState(1),
+                                                               num_training=400, num_testing=400)
         self._assembly = collect_delta_overall_accuracy()
+        self._assembly = self._assembly.sel(visual_field='contra')  # ignore ipsilateral effects
         self._assembly.attrs['stimulus_set'] = test_stimuli
-        self._metric = None  # TODO
+        self._metric = DifferenceOfFractions()
         super(Afraz2015OptogeneticAccuracy, self).__init__(
-            identifier='esteky.Afraz2015.optogenetics-accuracy',
+            identifier='dicarlo.Afraz2015.optogenetics-accuracy',
             ceiling_func=None,
             version=1, parent='IT',
             bibtex=BIBTEX)
@@ -140,10 +166,7 @@ class Afraz2015OptogeneticAccuracy(BenchmarkBase):
             self._logger.debug(f"Suppressing at {location}")
             candidate.perturb(perturbation=BrainModel.Perturbation.optogenetic_suppression,
                               target='IT', perturbation_parameters={
-                    # TODO
-                    'location': location,
-                    'amount_microliter': 1,  # FIXME
-                })
+                    **{'location': location}, **OPTOGENETIC_PARAMETERS})
             behavior = candidate.look_at(self._assembly.stimulus_set)
             behavior = behavior.expand_dims('site')
             behavior['site_iteration'] = 'site', [site]
@@ -158,18 +181,34 @@ class Afraz2015OptogeneticAccuracy(BenchmarkBase):
         attach_selectivity(candidate_behaviors, selectivities)
 
         # compute per condition accuracy
-        unperturbed_accuracy, site_accuracies = self.grouped_accuracy(unperturbed_behavior, candidate_behaviors)
+        unperturbed_accuracy = per_image_accuracy(unperturbed_behavior)
+        site_accuracies = per_image_accuracy(candidate_behaviors)
+        grouped_accuracy = self.group_accuracy(unperturbed_accuracy, site_accuracies)
 
-        # Typically, we would compare against packaged data with a metric here.
-        # For this dataset, we only have error bars and their significance, but we do not have the raw data
-        # that the significances are computed from.
-        # Because of that, we will _not_ compare candidate prediction against data here, but rather impose data
-        # characterizations on the candidate prediction. Specifically, we will check if:
-        # 1. behavioral accuracies in the non-suppressed ("image") and suppressed ("image+laser") conditions are
-        # significantly different, and
-        # 2. behavioral accuracy in the non-suppressed condition is significantly higher than with suppression
-        score = self._metric(accuracies, self._assembly)
+        # compute score
+        unperturbed_accuracy_candidate = grouped_accuracy.sel(laser_on=False).mean('presentation')
+        perturbed_accuracy_candidate = grouped_accuracy.sel(laser_on=True).mean()  # mean over everything at once
+        accuracy_delta_candidate = DataAssembly([unperturbed_accuracy_candidate, perturbed_accuracy_candidate],
+                                                coords={'performance': ['unperturbed', 'perturbed']},
+                                                dims=['performance'])
+        accuracy_delta_data = self._assembly.sel(aggregation='center')
+        accuracy_delta_data['performance'] = 'condition', ['unperturbed' if not laser_on else 'perturbed'
+                                                           for laser_on in accuracy_delta_data['laser_on'].values]
+        accuracy_delta_candidate.attrs['chance_performance'] = accuracy_delta_data.attrs['chance_performance'] = .5
+        accuracy_delta_candidate.attrs['maximum_performance'] = accuracy_delta_data.attrs['maximum_performance'] = 1.
+        score = self._metric(accuracy_delta_candidate, accuracy_delta_data)
         return score
+
+    def group_accuracy(self, unperturbed_accuracy, site_accuracies):
+        site_coords = site_accuracies['site']
+        site_accuracies = stack_multiindex(site_accuracies, 'presentation')
+        site_accuracies['laser_on'] = 'presentation', [True] * len(site_accuracies['presentation'])
+        unperturbed_accuracy['laser_on'] = 'presentation', [False] * len(unperturbed_accuracy['presentation'])
+        # in order to concatenate, we need the same coordinates on all data assemblies
+        for coord, dims, values in walk_coords(site_coords):
+            unperturbed_accuracy[coord] = 'presentation', [None] * len(unperturbed_accuracy['presentation'])
+        grouped_accuracy = xr.concat([site_accuracies, DataAssembly(unperturbed_accuracy)], dim='presentation')
+        return DataAssembly(grouped_accuracy)  # make sure MultiIndex is built
 
     def site_accuracies(self, unperturbed_behavior, perturbed_behaviors):
         unperturbed_accuracy = per_image_accuracy(unperturbed_behavior)
@@ -191,28 +230,34 @@ class Afraz2015OptogeneticAccuracy(BenchmarkBase):
         site_accuracies = merge_data_arrays(site_accuracies)
         return unperturbed_accuracy, site_accuracies
 
-    def grouped_accuracy(self, unperturbed_accuracy, site_accuracies):
-        accuracies = DataAssembly([
-            [unperturbed_accuracy.mean('presentation'),
-             standard_error_of_the_mean(unperturbed_accuracy, 'presentation')],
-            [site_accuracies.mean('presentation').mean('site'),
-             standard_error_of_the_mean(site_accuracies, 'presentation').mean('site')]
-        ], coords={
-            'laser_on': ('condition', [False, True]),
-            'condition_description': ('condition', ['image', 'image+laser']),
-            'aggregation': ['center', 'error']
-        }, dims=['condition', 'aggregation'])
-        return accuracies
+
+def stack_multiindex(assembly, new_dim):
+    indices = [np.arange(assembly.shape[dim]) for dim in range(len(assembly.shape))]
+    mesh_indices = np.meshgrid(*indices)
+    raveled_indices = [index.ravel('F') for index in mesh_indices]  # column-major order to ensure proper re-ordering
+    raveled_indices = {dim: index for dim, index in zip(assembly.dims, raveled_indices)}
+    raveled_values = assembly.values.ravel()
+    stacked_assembly = type(assembly)(raveled_values,
+                                      coords={coord: (new_dim, values[raveled_indices[dims[0]]])
+                                              for coord, dims, values in walk_coords(assembly)},
+                                      dims=[new_dim])
+    return stacked_assembly
 
 
 class Afraz2015MuscimolDeltaAccuracy(BenchmarkBase):
     def __init__(self):
         self._logger = logging.getLogger(fullname(self))
-        self._fitting_stimuli, self._selectivity_stimuli, test_stimuli = load_stimuli()
+        gender_stimuli, self._selectivity_stimuli = load_stimuli()
+        # "In practice, we first trained the animals on a fixed set of 400 images (200 males and 200 females)."
+        # "Once trained, we tested the animals’ performance on freshly generated sets of 400 images to confirm
+        #  that they could generalize the learning to novel stimuli"
+        # "For muscimol experiments, because the test blocks were shorter, smaller image sets (200 images) were used."
+        self._fitting_stimuli, test_stimuli = split_train_test(gender_stimuli, random_state=RandomState(1),
+                                                               num_training=400, num_testing=200)
         self._assembly = muscimol_delta_overall_accuracy()
         self._assembly.attrs['stimulus_set'] = test_stimuli
         super(Afraz2015MuscimolDeltaAccuracy, self).__init__(
-            identifier='esteky.Afraz2015.muscimol-delta_accuracy',
+            identifier='dicarlo.Afraz2015.muscimol-delta_accuracy',
             ceiling_func=None,
             version=1, parent='IT',
             bibtex=BIBTEX)
@@ -227,6 +272,7 @@ class Afraz2015MuscimolDeltaAccuracy(BenchmarkBase):
         # face-selective units (defined as FD d′ > 1)."
 
         # record to determine face-selectivity
+        candidate.start_task(BrainModel.Task.passive)  # passive viewing
         candidate.start_recording('IT', time_bins=[(50, 100)])
         recordings = candidate.look_at(self._selectivity_stimuli)
 
@@ -254,13 +300,9 @@ class Afraz2015MuscimolDeltaAccuracy(BenchmarkBase):
             self._logger.debug(f"Injecting at {location}")
             candidate.perturb(perturbation=BrainModel.Perturbation.muscimol,
                               target='IT', perturbation_parameters={
-                    # "1 μL of muscimol (5 mg/mL) was injected at 0.1 μL/min rate"
-                    'amount_microliter': 1,
-                    'mg_per_ml': 5,
-                    'rate_µl_per_min': 0.1,
-                    'location': location,
-                })
+                    **{'location': location}, **MUSCIMOL_PARAMETERS})
             behavior = candidate.look_at(self._assembly.stimulus_set)
+            candidate.perturb(perturbation=None, target='IT')  # reset
             behavior = behavior.expand_dims('site')
             behavior['site_iteration'] = 'site', [site]
             behavior['site_x'] = 'site', [location[0]]
@@ -270,14 +312,19 @@ class Afraz2015MuscimolDeltaAccuracy(BenchmarkBase):
         candidate_behaviors = merge_data_arrays(candidate_behaviors)
 
         # accuracies
-        accuracies = characterize_delta_accuracies(unperturbed_behavior=unperturbed_behavior,
-                                                   perturbed_behaviors=candidate_behaviors)
+        delta_accuracies = characterize_delta_accuracies(unperturbed_behavior=unperturbed_behavior,
+                                                         perturbed_behaviors=candidate_behaviors)
 
         # face selectivities
         selectivities = determine_selectivity(recordings)
-        attach_selectivity(accuracies, selectivities)
-        accuracies = type(accuracies)(accuracies)  # make sure all coords are part of MultiIndex
+        attach_selectivity(delta_accuracies, selectivities)
+        delta_accuracies = type(delta_accuracies)(delta_accuracies)  # make sure all coords are part of MultiIndex
 
+        # compute score
+        score = self.metric(delta_accuracies)
+        return score
+
+    def metric(self, delta_accuracies):
         # Typically, we would compare against packaged data with a metric here.
         # For this dataset, we only have error bars and their significance, but we do not have the raw data
         # that the significances are computed from.
@@ -287,18 +334,29 @@ class Afraz2015MuscimolDeltaAccuracy(BenchmarkBase):
         # to suppressing non face-selective sites, and
         # 2. suppressing face-selective sites lead to a negative behavioral effect
         # (i.e. either no significant effect or only significantly positive)
-        different = self.is_significantly_different(accuracies)
-        score = different and accuracies.sel(is_face_selective=True).mean() < 0
-        return Score([score], coords={'aggregation': ['center']}, dims=['aggregation'])
+        different = is_significantly_different(delta_accuracies, between='is_face_selective')
+        negative_effect = delta_accuracies.sel(is_face_selective=True).mean() < 0
+        score = different and negative_effect
+        score = Score([score], coords={'aggregation': ['center']}, dims=['aggregation'])
+        score.attrs['delta_accuracies'] = delta_accuracies
+        return score
 
-    def is_significantly_different(self, assembly, significance_threshold=0.05):
-        # convert assembly into dataframe
-        data = assembly.to_pandas().reset_index()
-        data = data.rename(columns={0: 'delta_accuracy'})
-        anova = pg.anova(data=data, dv='delta_accuracy', between='is_face_selective')
-        pvalue = anova['p-unc'][0]
-        significantly_different = pvalue < significance_threshold
-        return significantly_different
+
+def is_significantly_different(assembly, between, significance_threshold=0.05):
+    """
+    ANOVA between conditions
+    :param assembly: the assembly with the values to compare
+    :param between: condition to compare between, e.g. "is_face_selective"
+    :param significance_threshold: p-value threshold, e.g. 0.05
+    :return:
+    """
+    # convert assembly into dataframe
+    data = assembly.to_pandas().reset_index()
+    data = data.rename(columns={0: 'values'})
+    anova = pg.anova(data=data, dv='values', between=between)
+    pvalue = anova['p-unc'][0]
+    significantly_different = pvalue < significance_threshold
+    return significantly_different
 
 
 def find_selective_sites(num_face_detector_sites, num_nonface_detector_sites, recordings,
@@ -347,12 +405,12 @@ def characterize_delta_accuracies(unperturbed_behavior, perturbed_behaviors):
 def per_image_accuracy(behavior):
     labels = behavior['image_label']
     correct_choice_index = [behavior['choice'].values.tolist().index(label) for label in labels]
-    behavior = behavior.transpose('presentation', 'choice')  # we're operating on numpy array directly below
+    behavior = behavior.transpose('presentation', 'choice', ...)  # we're operating on numpy array directly below
     accuracies = behavior.values[np.arange(len(behavior)), correct_choice_index]
     accuracies = DataAssembly(accuracies,
                               coords={coord: (dims, values) for coord, dims, values
-                                      in walk_coords(behavior['presentation'])},
-                              dims=['presentation'])
+                                      in walk_coords(behavior) if not array_is_element(dims, 'choice')},
+                              dims=('presentation',) + behavior.dims[2:])
     return accuracies
 
 
@@ -386,12 +444,20 @@ def determine_selectivity(recordings):
 
 
 def load_stimuli():
-    # stimuli
-    # TODO: separate train/test
-    # TODO All images (60) -- used for testing
+    """ Retrieve gender and selectivity (object/face) stimuli """
     stimuli = collect_stimuli()
     gender_stimuli = stimuli[stimuli['category'].isin(['male', 'female'])]
     selectivity_stimuli = stimuli[stimuli['category'].isin(['object', 'face'])]
     gender_stimuli['image_label'] = gender_stimuli['category']
-    test_stimuli = gender_stimuli.sample(n=60, random_state=1)
-    return gender_stimuli, selectivity_stimuli, test_stimuli
+    gender_stimuli.identifier = stimuli.identifier + '-gender'
+    selectivity_stimuli.identifier = stimuli.identifier + '-selectivity'
+    return gender_stimuli, selectivity_stimuli
+
+
+def split_train_test(stimuli, random_state, num_training, num_testing):
+    train_stimuli = stimuli.sample(n=num_training, replace=False, random_state=random_state)
+    remaining_stimuli = stimuli[~stimuli['image_id'].isin(train_stimuli['image_id'])]
+    test_stimuli = remaining_stimuli.sample(n=num_testing, replace=False, random_state=random_state)
+    train_stimuli.identifier = stimuli.identifier + '-train'
+    test_stimuli.identifier = stimuli.identifier + '-test'
+    return train_stimuli, test_stimuli

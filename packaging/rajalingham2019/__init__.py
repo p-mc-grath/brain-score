@@ -34,7 +34,7 @@ def collect_assembly(contra_hemisphere=True):
     metrics = [v[0] for v in k1['metrics'][0]]
     assembly = DataAssembly([k1['D0'], k1['D1']],
                             coords={
-                                'injected': [True, False],  # TODO: I think the ordering is wrong
+                                'injected': [False, True],
                                 'injection': (dim_replace['subj'], [condition_replace[c] for c in conditions]),
                                 'subject_id': (dim_replace['subj'], list(subjects)),
                                 'metric': metrics,
