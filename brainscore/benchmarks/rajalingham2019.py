@@ -218,7 +218,7 @@ class SpatialCharacterizationMetric:
 
         statistics_list = []
         for monkey in set(dprime_assembly.monkey.data):
-            # for array in set(dprime_assembly.array):
+            # for array in set(dprime_assembly.array.data):
             sub_assembly = dprime_assembly.sel(monkey=monkey)  # , array=array)
             distances, correlations = self._compute_response_deficit_distance(sub_assembly)
             mask = np.triu_indices(sub_assembly.site.size)
