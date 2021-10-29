@@ -126,12 +126,12 @@ class Afraz2015OptogeneticAccuracy(BenchmarkBase):
         # "In practice, we first trained the animals on a fixed set of 400 images (200 males and 200 females)."
         # "Once trained, we tested the animals’ performance on freshly generated sets of 400 images to confirm
         #  that they could generalize the learning to novel stimuli"
-        self._fitting_stimuli, test_stimuli = split_train_test(gender_stimuli, random_state=RandomState(1),
+        self._fitting_stimuli, test_stimuli = split_train_test(gender_stimuli, random_state=RandomState(42),
                                                                num_training=400, num_testing=400)
         self._assembly = collect_delta_overall_accuracy()
         self._assembly = self._assembly.sel(visual_field='contra')  # ignore ipsilateral effects
         self._assembly.attrs['stimulus_set'] = test_stimuli
-        self._metric = DifferenceOfFractions()
+        self._metric = DifferenceOfFractions(chance_performance=0.5, maximum_performance=1.0)
         super(Afraz2015OptogeneticAccuracy, self).__init__(
             identifier='dicarlo.Afraz2015.optogenetics-accuracy',
             ceiling_func=None,
@@ -194,8 +194,7 @@ class Afraz2015OptogeneticAccuracy(BenchmarkBase):
         accuracy_delta_data = self._assembly.sel(aggregation='center')
         accuracy_delta_data['performance'] = 'condition', ['unperturbed' if not laser_on else 'perturbed'
                                                            for laser_on in accuracy_delta_data['laser_on'].values]
-        accuracy_delta_candidate.attrs['chance_performance'] = accuracy_delta_data.attrs['chance_performance'] = .5
-        accuracy_delta_candidate.attrs['maximum_performance'] = accuracy_delta_data.attrs['maximum_performance'] = 1.
+        accuracy_delta_candidate.attrs['raw'] = grouped_accuracy
         score = self._metric(accuracy_delta_candidate, accuracy_delta_data)
         return score
 
