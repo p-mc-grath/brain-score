@@ -197,7 +197,7 @@ class _Moeller2017(BenchmarkBase):
                                  'perturbation_parameters': {
                                      'current_pulse_mA': current,
                                      'stimulation_duration_ms': STIMULATION_PARAMETERS['stimulation_duration_ms'],
-                                     'location': LazyLoad(self._perturbation_coordinates)
+                                     'location': LazyLoad(lambda: self._perturbation_coordinates)
                                  }}
 
             perturbation_list.append(perturbation_dict)
@@ -208,7 +208,7 @@ class _Moeller2017(BenchmarkBase):
         Fit a linear regression between the recordings of the training stimuli and the ground truth
         :return: trained linear regressor
         '''
-        candidate.start_recording()
+        candidate.start_recording(recording_target='IT', time_bins=[(70, 170)])
         recordings = candidate.look_at(self._training_stimuli)
         samples = 500  # TODO why 500
 
@@ -295,13 +295,11 @@ class _Moeller2017(BenchmarkBase):
         :param res: int, resolution of voxels in mm
         """
 
-        def _get_grid_coord():
+        def _get_grid_coord(x, y):
             """
             Adapted from Lee et al. 2020 code, not public
             Returns coordinates of grid with width of 0.5
             """
-            x = x.reshape(len(x), 1)
-            y = y.reshape(len(y), 1)
             xmin, xmax = np.floor(np.min(x)), np.ceil(np.max(x))
             ymin, ymax = np.floor(np.min(y)), np.ceil(np.max(y))
             grids = np.array(np.meshgrid(np.arange(xmin, xmax, res), np.arange(ymin, ymax, res)))
@@ -311,7 +309,9 @@ class _Moeller2017(BenchmarkBase):
 
         # Get voxel coordinates
         x, y = assembly.neuroid.tissue_x.values, assembly.neuroid.tissue_y.values
-        gridx, gridy = _get_grid_coord()
+        x = x.reshape(len(x), 1)
+        y = y.reshape(len(y), 1)
+        gridx, gridy = _get_grid_coord(x, y)
 
         # compute sigma from fwmh
         sigma = fwhm / np.sqrt(8. * np.log(2))
@@ -321,14 +321,14 @@ class _Moeller2017(BenchmarkBase):
         gf = 1. / (2 * np.pi * sigma ** 2) * np.exp(- d_square / (2 * sigma ** 2))
 
         features_smoothed = DataArray(
-            data=np.dot(assembly.values, gf),
-            dims=['category_name', 'neuroid_id'],
+            data=np.dot(assembly.values.T, gf),
+            dims=['category_name', 'voxel_id'],
             coords={'category_name': assembly.category_name.values,
-                    'neuroid_id': assembly.neuroid_id.values,
-                    'voxel_x': ('neuroid_id', gridx.squeeze()),
-                    'voxel_y': ('neuroid_id', gridy.squeeze())}
+                    'voxel_id': np.arange(gf.shape[1]),
+                    'voxel_x': ('voxel_id', gridx.squeeze()),
+                    'voxel_y': ('voxel_id', gridy.squeeze())}
         )
-        return features_smoothed,
+        return features_smoothed
 
     @staticmethod
     def _get_purity_center(selectivity_assembly: DataArray, radius=1):
@@ -374,17 +374,21 @@ class _Moeller2017(BenchmarkBase):
         assert (recordings >= 0).all(), 'selectivities must be positive'
 
         selectivities = []
-        for neuroid_id in tqdm(recordings['neuroid_id'].values, desc='neuron face dprime'):
-            neuron = recordings.sel(neuroid_id=neuroid_id)
-            neuron = neuron.squeeze()
-            face_mean, face_variance = mean_var(neuron.sel(category_name='Faces'))  # image_label='face'))
+        for voxel_id in tqdm(recordings['voxel_id'].values, desc='neuron face dprime'):
+            voxel = recordings.sel(voxel_id=voxel_id)
+            voxel = voxel.squeeze()
+            face_mean, face_variance = mean_var(voxel.sel(category_name='Faces'))  # image_label='face'))
             nonface_mean, nonface_variance = mean_var(
-                neuron.where(neuron.category_name != 'Faces', drop=True))  # sel(image_label='nonface'))
+                voxel.where(voxel.category_name != 'Faces', drop=True))  # sel(image_label='nonface'))
             dprime = (face_mean - nonface_mean) / np.sqrt((face_variance + nonface_variance) / 2)
             selectivities.append(dprime)
 
-        selectivity_array = recordings.copy()  # DataArray(result, coords={'neuroid_id': recordings['neuroid_id'].values}, dims=['neuroid_id'])
-        selectivity_array.data = selectivities
+        selectivity_array = DataArray(
+            data=selectivities,
+            dims=['voxel_id'],
+            coords={'voxel_id': recordings.voxel_id.values,
+                    'voxel_x': ('voxel_id', recordings.voxel_x.values),
+                    'voxel_y': ('voxel_id', recordings.voxel_y.values)})
         return selectivity_array
 
     def _sample_outside_face_patch(self, selectivity_assembly: DataArray, radius=2):
