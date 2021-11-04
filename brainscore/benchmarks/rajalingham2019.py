@@ -17,6 +17,7 @@ from brainio.assemblies import merge_data_arrays, walk_coords, DataAssembly, arr
 from brainscore.benchmarks import BenchmarkBase
 from brainscore.metrics import Score
 from brainscore.metrics.behavior_differences import DeficitPredictionTask, DeficitPredictionObject
+from brainscore.metrics.difference_of_correlations import DifferenceOfCorrelations
 from brainscore.metrics.image_level_behavior import _o2
 from brainscore.metrics.inter_individual_stats_ceiling import InterIndividualStatisticsCeiling
 from brainscore.metrics.significant_match import SignificantCorrelation
@@ -189,9 +190,14 @@ def Rajalingham2019DeficitPredictionObject():
                             metric=metric)
 
 
+def Rajalingham2019DeficitsSignificant():
+    return _Rajalingham2019(identifier='dicarlo.Rajalingham2019-deficits_significant',
+                            metric=SpatialCharacterizationMetric())
+
+
 def Rajalingham2019SpatialDeficits():
-    metric = SpatialCharacterizationMetric()
-    return _Rajalingham2019(identifier='dicarlo.Rajalingham2019.IT-spatial_deficit_similarity', metric=metric)
+    return _Rajalingham2019(identifier='dicarlo.Rajalingham2019-spatial_deficit_similarity',
+                            metric=DifferenceOfCorrelations(correlation_variable='distance'))
 
 
 def DicarloRajalingham2019SpatialDeficitsQuantified():
@@ -228,7 +234,7 @@ class SpatialCharacterizationMetric:
         target_statistic = self.compute_response_deficit_distance_target(target)
 
         score = self._similarity_metric(candidate_statistic, target_statistic)
-        # score.attrs['target_statistic'] = target_statistic
+        score.attrs['candidate_behaviors'] = behaviors
         score.attrs['candidate_assembly'] = candidate_assembly
         return score
 
