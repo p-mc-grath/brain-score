@@ -1,15 +1,21 @@
 import itertools
-
+from os import listdir
+from pathlib import Path
+import re
 from brainscore.utils import LazyLoad
 from tqdm import tqdm
 import numpy as np
 from sklearn.linear_model import LinearRegression
+import pandas as pd
 from brainscore.metrics import Metric
 from brainscore.benchmarks import BenchmarkBase
 from brainscore.model_interface import BrainModel
 from brainscore.metrics.accuracy import Accuracy
 from brainscore.metrics.performance_similarity import PerformanceSimilarity  # TODO
 from brainio.assemblies import merge_data_arrays, DataArray
+from brainio.stimuli import StimulusSet
+
+# TODO within Face patch means within AM right now
 
 BIBTEX = '''@article{article,
             author = {Moeller, Sebastian and Crapse, Trinity and Chang, Le and Tsao, Doris},
@@ -405,50 +411,66 @@ class _Moeller2017(BenchmarkBase):
 
     def _collect_target_assembly(self):
         '''
-        TODO make sure assembly.stimulus_set corresponds to target_stimulus_class
         TODO stimulus set face_patch
         TODO stimulus set training decoder
-        TODO full list of objects
-        TODO make sure assembly has source attribute --> ceiling??
+        TODO deal with data from multiple monkeys
+        TODO paths
         Load Data from path + subselect as specified by Experiment
-
-        :return: DataAssembly
-        '''
-        STIMULUS_CLASS_DICT = {
-            'faces': ['faces'],  # 32; 6 expression each
-            'objects': [],  # TODO 28; 3 viewing angles each
-            'non_face_objects_eliciting_face_patch_response_plus_faces': ['apples_bw', 'citrus_fruits_bw', 'teapots_bw',
-                                                                          'clocks_bw', 'faces_bw'],  # 15; 3/cats
-            'abstract_faces': ['face_cartoons', 'face_linedrawings', 'face_mooneys', 'face_silhouettes'],  # 16; 4/cat
-            'abstract_houses': ['house_cartoons', 'house_linedrawings', 'house_silhouettes', 'face_mooneys',
-                                'face_mooneys_inverted']  # 20; 4/cat
-        }
-
-        assembly = self._load_assembly()
-
-        target_stimulus_class = STIMULUS_CLASS_DICT[self._stimulus_class]
-        target_assembly = assembly.multisel(object_name=target_stimulus_class)  # TODO
-        # TODO add object_ID & image_ID coords; image_ID = expression or viewing angle
-        return target_assembly
-
-    @staticmethod
-    def _load_assembly():
-        '''
-        TODO Load DataArray from path
-        TODO package all data
-        TODO get stimulus set
-        make sure it has a monkey dimension for ceiling computation
         :return: DataArray
         '''
-        assembly = None  # TODO
-        return assembly
+        # TODO Faces JPEG, Abstract Houses tif, all other PNG
+        path = Path(__file__).parent / self._stimulus_class  # TODO
+        image_ids = [self._stimulus_class + '/' + e for e in listdir(path)]
+        object_names, object_ids = [], []
+        for image_id in image_ids:
+            object_ids.append(re.split(r"_", image_id)[1])
+            if self._stimulus_class == 'Faces' or ''.join([c for c in object_ids[-1] if not c.isdigit()]) == 'r':
+                object_names.append('face')
+            else:
+                object_names.append(''.join([c for c in object_ids[-1] if not c.isdigit()]))
+        stimulus_set = StimulusSet({'image_id': image_ids, 'object_name': object_names, 'object_id': object_ids})
+
+        training_stimuli = None  # TODO
+        stimulus_set_face_patch = None  # TODO
+
+        # statistic for each dataset
+        path = Path(__file__).parent / 'SummaryMat.xlsx'  # TODO
+        df = pd.read_excel(path)
+
+        # select relevant lines
+        df = df.loc[(df.Stimulus_Class == self._stimulus_class) &
+                    (df.Perturbation_Location == self._perturbation_location) &
+                    (df.Monkey == 1)]  # TODO
+
+        # compute accuracies
+        data = {'accuracies': [], 'condition': [], 'current_pulse_mA': [], 'object_name': [], 'source': []}
+        for condition, stimulation in itertools.product(['Same', 'Different'], ['', '_MSC']):
+            setup = condition + stimulation
+            accuracy = df['Hit_' + setup] / (df['Hit_' + setup] + df['Miss_' + setup])
+            data['accuracies'].append(accuracy)
+            data['condition'].append([condition.lower() + '_id'] * len(accuracy))
+            data['current_pulse_mA'].append(data.Current_Pulse_mA.to_list())
+            data['object_name'].append(df.Object_Names.to_list())
+            data['source'].append(df.Monkey.to_list())
+
+        # make into dataarray
+        target_assembly = DataArray(data=data['accuracies'], dims='condition',
+                                    coords={'condition': data['condition'],  # same vs. diff
+                                            'object_name': ('condition', data['object_name']),
+                                            'current_pulse_mA': ('condition', data['current_pulse_mA'])},
+                                    attrs={'stimulus_set': stimulus_set,
+                                           'training_stimuli': training_stimuli,
+                                           'stimulus_set_face_patch': stimulus_set_face_patch})
+
+        return target_assembly
 
 
 def Moeller2017Experiment1():
     '''
     Stimulate face patch during face identification
+    32 identities; 6 expressions each
     '''
-    return _Moeller2017(stimulus_class='faces',
+    return _Moeller2017(stimulus_class='Faces',
                         perturbation_location='within_facepatch',
                         identifier='dicarlo.Moeller2017-Experiment_1',
                         metric=PerformanceSimilarity(),
@@ -460,16 +482,17 @@ def Moeller2017Experiment2():
     TODO  very unclean
     i: Stimulate outside of the face patch during face identification
     ii: Stimulate face patch during object identification
+    28 Objects; 3 viewing angles each
     '''
 
     class _Moeller2017Experiment2(BenchmarkBase):
         def __init__(self):
             super().__init__(
                 identifier='dicarlo.Moeller2017-Experiment_2', ceiling_func=None, version=1, parent='IT', bibtex=BIBTEX)
-            self.benchmark1 = _Moeller2017(stimulus_class='faces', perturbation_location='outside_facepatch',
+            self.benchmark1 = _Moeller2017(stimulus_class='Faces', perturbation_location='outside_facepatch',
                                            identifier='dicarlo.Moeller2017-Experiment_2i',
                                            metric=PerformanceSimilarity(), performance_measure=Accuracy())
-            self.benchmark2 = _Moeller2017(stimulus_class='objects', perturbation_location='within_facepatch',
+            self.benchmark2 = _Moeller2017(stimulus_class='Objects', perturbation_location='within_facepatch',
                                            identifier='dicarlo.Moeller2017-Experiment_2ii',
                                            metric=PerformanceSimilarity(), performance_measure=Accuracy())
 
@@ -482,8 +505,9 @@ def Moeller2017Experiment2():
 def Moeller2017Experiment3():
     '''
     Stimulate face patch during face & non-face object eliciting patch response identification
+    15 black & white round objects + faces; 3 exemplars per category  (apples, citrus, teapots, alarmclocks, faces)
     '''
-    return _Moeller2017(stimulus_class='non_face_objects_eliciting_face_patch_response_plus_faces',
+    return _Moeller2017(stimulus_class='Eliciting_Face_Response',
                         perturbation_location='within_facepatch',
                         identifier='dicarlo.Moeller2017-Experiment_3',
                         metric=PerformanceSimilarity(),
@@ -493,8 +517,9 @@ def Moeller2017Experiment3():
 def Moeller2017Experiment4a():
     '''
     Stimulate face patch during abstract face identification
+    16 Face Abtractions; 4 per category (Line Drawings, Silhouettes, Cartoons, Mooney Faces)
     '''
-    return _Moeller2017(stimulus_class='abstract_faces',
+    return _Moeller2017(stimulus_class='Abstract_Faces',
                         perturbation_location='within_facepatch',
                         identifier='dicarlo.Moeller2017-Experiment_4a',
                         metric=PerformanceSimilarity(),
@@ -504,8 +529,9 @@ def Moeller2017Experiment4a():
 def Moeller2017Experiment4b():
     '''
     Stimulate face patch during face & abstract houses identification
+    20 Abstract Houses & Faces; 4 per category (House Line Drawings, House Cartoons, House Silhouettes, Mooney Faces, Mooney Faces up-side-down)
     '''
-    return _Moeller2017(stimulus_class='abstract_houses',
+    return _Moeller2017(stimulus_class='Abstract_Houses',
                         perturbation_location='within_facepatch',
                         identifier='dicarlo.Moeller2017-Experiment_4b',
                         metric=PerformanceSimilarity(),
