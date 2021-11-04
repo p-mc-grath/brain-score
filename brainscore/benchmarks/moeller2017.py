@@ -32,7 +32,7 @@ BIBTEX = '''@article{article,
 
 STIMULATION_PARAMETERS = {
     'type': [None, BrainModel.Perturbation.microstimulation, BrainModel.Perturbation.microstimulation],
-    'current_pulse_mA': [0, 100, 300],
+    'current_pulse_mA': [0, 300],
     'pulse_rate_Hz': 150,
     'pulse_duration_ms': 0.2,
     'pulse_interval_ms': 0.1,
@@ -57,8 +57,7 @@ class _Moeller2017(BenchmarkBase):
         Within each dataset, the number of instances per category is equalized. As is the number of different
         representations (faces: expressions, object: viewing angles) per instance.
 
-        :param stimulus_class: one of: ['faces', 'objects', 'non_face_objects_eliciting_face_patch_response_plus_faces',
-                                        'abstract_faces', 'abstract_houses']
+        :param stimulus_class: one of: ['Faces', 'Objects', 'Eliciting_Face_Response', 'Abstract_Faces', 'Abstract_Houses']
         :param perturbation_location: one of: ['within_facepatch', 'outside_facepatch']
         :param identifier: benchmark id
         :param metric: in: performances along multiple dimensions of 2 instances | out: Score object, evaluating similarity
@@ -70,8 +69,8 @@ class _Moeller2017(BenchmarkBase):
             version=1, parent='IT',
             bibtex=BIBTEX)
 
-        self._metric = metric()
-        self._performance_measure = performance_measure()
+        self._metric = metric
+        self._performance_measure = performance_measure
         self._perturbations = self._set_up_perturbations(perturbation_location)
         self._stimulus_class = stimulus_class
 
@@ -465,7 +464,7 @@ class _Moeller2017(BenchmarkBase):
                     source              = list, monkey number
         '''
         # statistic for each dataset
-        path = Path(__file__).parent / 'SummaryMat.xlsx'  # TODO
+        path = Path(__file__).parent.parent.parent.parent / 'moeller_stimuli' / 'SummaryMat.xlsx'  # TODO
         df = pd.read_excel(path)
 
         # select relevant lines
@@ -494,7 +493,7 @@ class _Moeller2017(BenchmarkBase):
 
         :return: StimulusSet object containing information about image path, object class and object identity
         '''
-        path = Path(__file__).parent / self._stimulus_class  # TODO
+        path = Path(__file__).parent.parent.parent.parent / 'moeller_stimuli' / self._stimulus_class  # TODO
         image_ids = [self._stimulus_class + '/' + e for e in listdir(path)]
         object_names, object_ids = [], []
         for image_id in image_ids:
@@ -532,7 +531,7 @@ class _Moeller2017(BenchmarkBase):
         :return: StimulusSet Object, same as 'Faces' used in Experiment 1
         '''
         stimulus_class = 'Faces'
-        path = Path(__file__).parent / stimulus_class  # TODO
+        path = Path(__file__).parent.parent.parent.parent / 'moeller_stimuli' / stimulus_class  # TODO
         image_ids = [stimulus_class + '/' + e for e in listdir(path)]
         object_names, object_ids = [], []
         for image_id in image_ids:
