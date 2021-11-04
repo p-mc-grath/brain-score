@@ -498,7 +498,7 @@ class _Moeller2017(BenchmarkBase):
         :return: StimulusSet object containing information about image path, object class and object identity
         '''
         path = Path(__file__).parent.parent.parent.parent / 'moeller_stimuli' / self._stimulus_class  # TODO
-        image_ids = [self._stimulus_class + '/' + e for e in listdir(path)]
+        image_ids = listdir(path)
         object_names, object_ids = [], []
         for image_id in image_ids:
             object_ids.append(re.split(r"_", image_id)[1])
@@ -507,6 +507,8 @@ class _Moeller2017(BenchmarkBase):
             else:
                 object_names.append(''.join([c for c in object_ids[-1] if not c.isdigit()]))
         stimulus_set = StimulusSet({'image_id': image_ids, 'object_name': object_names, 'object_id': object_ids})
+        stimulus_set.identifier = 'Moeller2017-' + self._stimulus_class
+        stimulus_set.image_paths = {id: str(path / id) for id in image_ids}
         return stimulus_set
 
     @staticmethod
@@ -536,12 +538,14 @@ class _Moeller2017(BenchmarkBase):
         '''
         stimulus_class = 'Faces'
         path = Path(__file__).parent.parent.parent.parent / 'moeller_stimuli' / stimulus_class  # TODO
-        image_ids = [stimulus_class + '/' + e for e in listdir(path)]
+        image_ids = listdir(path)
         object_names, object_ids = [], []
         for image_id in image_ids:
             object_ids.append(re.split(r"_", image_id)[1])
             object_names.append('face')
         stimuli = StimulusSet({'image_id': image_ids, 'object_name': object_names, 'object_id': object_ids})
+        stimuli.identifier = 'moeller2017-Faces'
+        stimuli.image_paths = {id: str(path / id) for id in image_ids}
         return stimuli
 
     @staticmethod
