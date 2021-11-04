@@ -142,7 +142,7 @@ class _Rajalingham2019(BenchmarkBase):
         return behavior
 
     def _sample_injection_locations(self):
-        border_area = MuscimolInjection()._cov * 1
+        border_area = MuscimolInjection()._cov * 1  # TODO
         injection_locations = np.random.rand(self._num_sites * 10) * (10 - border_area)
         injection_locations = injection_locations[injection_locations > border_area]
         injection_locations = injection_locations[:self._num_sites * 2]
