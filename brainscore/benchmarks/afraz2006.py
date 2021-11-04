@@ -51,13 +51,23 @@ STIMULATION_PARAMETERS = {
 STIMULATION_PARAMETERS = frozenset(STIMULATION_PARAMETERS.items())  # make immutable so that params cannot be changed
 
 
-class Afraz2006(BenchmarkBase):
-    def __init__(self):
+def Afraz2006FaceDependentShiftSignificant():
+    return _Afraz2006(metric_identifier='shift_significant',
+                      metric=SignificantCorrelation(x_coord='face_selectivity', ignore_nans=True))
+
+
+def Afraz2006FaceDependentShift():
+    return _Afraz2006(metric_identifier='face_dependent_shift',
+                      metric=DifferenceOfCorrelations(correlation_variable='face_selectivity'))
+
+
+class _Afraz2006(BenchmarkBase):
+    def __init__(self, metric_identifier, metric):
         self._logger = logging.getLogger(fullname(self))
         self._assembly, self._fitting_stimuli = self._load_assembly()
-        self._metric = DifferenceOfCorrelations(correlation_variable='face_selectivity')
-        super(Afraz2006, self).__init__(
-            identifier='esteky.Afraz2006-selective_psychometric_shift',
+        self._metric = metric
+        super(_Afraz2006, self).__init__(
+            identifier='esteky.Afraz2006-' + metric_identifier,
             ceiling_func=None,
             version=1, parent='IT',
             bibtex=BIBTEX)

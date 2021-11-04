@@ -14,6 +14,7 @@ from brainio.assemblies import merge_data_arrays, walk_coords, DataAssembly, arr
 from brainscore.benchmarks import BenchmarkBase
 from brainscore.metrics import Score
 from brainscore.metrics.behavior_differences import DeficitPredictionTask, DeficitPredictionObject
+from brainscore.metrics.difference_of_correlations import DifferenceOfCorrelations
 from brainscore.metrics.image_level_behavior import _o2
 from brainscore.metrics.significant_match import SignificantCorrelation
 from brainscore.metrics.transformations import CrossValidation
@@ -176,9 +177,14 @@ def Rajalingham2019DeficitPredictionObject():
                             metric=metric)
 
 
+def Rajalingham2019DeficitsSignificant():
+    return _Rajalingham2019(identifier='dicarlo.Rajalingham2019-deficits_significant',
+                            metric=SpatialCharacterizationMetric())
+
+
 def Rajalingham2019SpatialDeficits():
-    metric = SpatialCharacterizationMetric()
-    return _Rajalingham2019(identifier='dicarlo.Rajalingham2019.IT-spatial_deficit_similarity', metric=metric)
+    return _Rajalingham2019(identifier='dicarlo.Rajalingham2019-spatial_deficit_similarity',
+                            metric=DifferenceOfCorrelations(correlation_variable='distance'))
 
 
 class SpatialCharacterizationMetric:
