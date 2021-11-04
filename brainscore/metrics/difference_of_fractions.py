@@ -24,6 +24,9 @@ class DifferenceOfFractions(Metric):
         frac1 = self.normalized_fraction(assembly1)
         frac2 = self.normalized_fraction(assembly2)
         score = 1 - np.abs(frac1 - frac2)
+        # add meta
+        score.attrs['assembly1'] = assembly1
+        score.attrs['assembly2'] = assembly2
         return Score(score)
 
     def normalized_fraction(self, assembly):

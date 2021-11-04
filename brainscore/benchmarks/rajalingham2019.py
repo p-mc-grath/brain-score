@@ -194,7 +194,7 @@ class SpatialCharacterizationMetric:
         target_statistic = self.compute_response_deficit_distance_target(target)
 
         score = self._similarity_metric(candidate_statistic, target_statistic)
-        # score.attrs['target_statistic'] = target_statistic
+        score.attrs['candidate_behaviors'] = behaviors
         score.attrs['candidate_assembly'] = candidate_assembly
         return score
 
