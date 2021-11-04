@@ -142,6 +142,8 @@ def muscimol_delta_overall_accuracy():
         'aggregation': ('measurement', data['aggregation']),
     }, dims=['measurement'])
     assembly = assembly.unstack()
+    assembly.attrs['baseline_accuracy_mean'] = 85.9  # from 3A
+    assembly.attrs['baseline_accuracy_error'] = 86.2 - 85.9  # from 3A
     return assembly
 
 
