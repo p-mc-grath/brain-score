@@ -447,11 +447,11 @@ class _Moeller2017(BenchmarkBase):
         for condition, stimulation in itertools.product(['Same', 'Different'], ['', '_MSC']):
             setup = condition + stimulation
             accuracy = df['Hit_' + setup] / (df['Hit_' + setup] + df['Miss_' + setup])
-            data['accuracies'].append(accuracy)
-            data['condition'].append([condition.lower() + '_id'] * len(accuracy))
-            data['current_pulse_mA'].append(data.Current_Pulse_mA.to_list())
-            data['object_name'].append(df.Object_Names.to_list())
-            data['source'].append(df.Monkey.to_list())
+            data['accuracies'] += accuracy.to_list()
+            data['condition'] += [condition.lower() + '_id'] * len(accuracy)
+            data['current_pulse_mA'] += df.Current_Pulse_mA.to_list() if stimulation == '_MSC' else [0] * len(accuracy)
+            data['object_name'] += df.Object_Names.to_list()
+            data['source'] += df.Monkey.to_list()
 
         # make into dataarray
         target_assembly = DataArray(data=data['accuracies'], dims='condition',
