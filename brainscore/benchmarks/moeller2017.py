@@ -228,6 +228,14 @@ class _Moeller2017(BenchmarkBase):
         '''
         Create an array of randomly sampled recordings, each line is one task, i.e. two recordings which are to be
         judged same vs. different ID
+
+        From Online Methods: Visual Stimuli & Behavioral Tasks section:
+        " By presenting faces of the same identity with six different expressions in image set 1
+        and objects of the same identity at three different view angles in image set 2, we
+        ensured that even in the match condition we presented two different images"
+        -> for Faces & Objects, the same condition excludes the same image as stimulus. For
+            all other Experiments, same means the exact same !note: decoder only trained on Faces
+
         :param category_pool: Model IT recordings, assumed be from one category only
         :param samples: int: number of samples
         :return: array (samples x length of two concatenated recordings), each line contains two recordings
@@ -245,9 +253,14 @@ class _Moeller2017(BenchmarkBase):
             image_one_same = category_pool[:, random_idx_same]
             same_image_id, same_object_id = image_one_same.presentation.values.item()  # TODO weird xarray behavior, diappearing dimension after selection
             sampled_recordings[i, :recording_size] = image_one_same.values
-            sampled_recordings[i, recording_size:] = rng.choice(category_pool.where(
-                (category_pool.object_id == same_object_id) &
-                (category_pool.image_id != same_image_id), drop=True).T)
+            if self._stimulus_class in ['Faces', 'Objects']:  # not same image requirement only in Experiment 1&2
+                sampled_recordings[i, recording_size:] = rng.choice(category_pool.where(
+                    (category_pool.object_id == same_object_id) &
+                    (category_pool.image_id != same_image_id), drop=True).T)
+            else:
+                sampled_recordings[i, recording_size:] = image_one_same.values
+                # <=> rng.choice(category_pool.where((category_pool.object_id == same_object_id), drop=True).T)
+                # because there is only one image per object_id
 
             # condition 'different_id': object_id different between recording one and two
             image_one_diff = category_pool[:, random_idx_different]
@@ -510,7 +523,9 @@ class _Moeller2017(BenchmarkBase):
         object_names, object_ids = [], []
         for image_id in image_ids:
             object_ids.append(re.split(r"_", image_id)[1])
-            if self._stimulus_class == 'Faces' or ''.join([c for c in object_ids[-1] if not c.isdigit()]) == 'r':
+            if self._stimulus_class == 'Objects':
+                object_names.append('object')
+            elif self._stimulus_class == 'Faces' or ''.join([c for c in object_ids[-1] if not c.isdigit()]) == 'r':
                 object_names.append('face')
             else:
                 object_names.append(''.join([c for c in object_ids[-1] if not c.isdigit()]))
