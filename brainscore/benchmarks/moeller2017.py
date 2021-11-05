@@ -5,7 +5,7 @@ import re
 from tqdm import tqdm
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import LogisticRegression
 
 import brainscore
 from brainscore.utils import LazyLoad
@@ -14,7 +14,7 @@ from brainscore.benchmarks import BenchmarkBase
 from brainscore.model_interface import BrainModel
 from brainscore.metrics.accuracy import Accuracy
 from brainscore.metrics.performance_similarity import PerformanceSimilarity  # TODO
-from brainio.assemblies import merge_data_arrays, DataArray
+from brainio.assemblies import merge_data_arrays, DataArray, DataAssembly
 from brainio.stimuli import StimulusSet
 
 # TODO within Face patch means within AM right now
@@ -110,7 +110,7 @@ class _Moeller2017(BenchmarkBase):
         Perturb model and compute behavior w.r.t. task
         :param candidate: BrainModel
         :perturbation keys: type, perturbation_parameters
-        :return: DataArray: values = choice, dims = [truth, current_pulse_mA, condition, object_name]
+        :return: DataAssembly: values = choice, dims = [truth, current_pulse_mA, condition, object_name]
         '''
         candidate.perturb(perturbation=None, target='IT')  # reset
         candidate.perturb(perturbation=perturbation['type'], target='IT',
@@ -119,7 +119,9 @@ class _Moeller2017(BenchmarkBase):
         IT_recordings = candidate.look_at(self._stimulus_set)
 
         behavior = self._compute_behavior(IT_recordings, decoder)
-        behavior['current_pulse_mA'] = behavior.dims[0], perturbation['perturbation_parameters']['current_pulse_mA']
+        behavior['current_pulse_mA'] = behavior.dims[0], \
+                                       [perturbation['perturbation_parameters']['current_pulse_mA']] * behavior.shape[0]
+        behavior = type(behavior)(behavior)  # make sure current_pulse_mA is indexed
         return behavior
 
     def _compute_behavior(self, IT_recordings: DataArray, decoder):
@@ -131,7 +133,7 @@ class _Moeller2017(BenchmarkBase):
             dims:   object_name : list of strings, category
             coords: object_ID   : list of strings, object identity
                     image_ID    : list of strings, object + view angle identity
-        :return: behaviors DataArray
+        :return: behaviors DataAssembly
             values: choice
             dims:   truth       : list of int/bool, 'same_id'==1, 'different_id'==0,
             coords: condition   : list of strings, ['same_id == 1, 'different_id'==0]
@@ -139,45 +141,44 @@ class _Moeller2017(BenchmarkBase):
         '''
         samples = 500  # TODO why 500
         behavior_data = []
-        for object_name in set(IT_recordings.object_name):
+        for object_name in set(IT_recordings.object_name.values):
             recordings, conditions = self._sample_recordings(IT_recordings.sel(object_name=object_name),
                                                              samples=samples)
-            choices = decoder.predict(recordings)
-            behavior = DataArray(data=choices, dims='condition',
-                                 coords={'truth': np.array(conditions) == 'same_id',
-                                         'condition': ('truth', conditions),
-                                         'object_name': ('truth', [object_name] * samples * 2)})
+            choices = (decoder.predict(recordings) > .5).astype(int)
+            behavior = DataAssembly(data=choices, dims='condition',
+                                    coords={'condition': conditions,
+                                            'truth': ('condition', (np.array(conditions) == 'same_id').astype(int)),
+                                            'object_name': ('condition', [object_name] * samples * 2)})
             behavior_data.append(behavior)
 
         behaviors = merge_data_arrays(behavior_data)
         return behaviors
 
-    def _compute_performance(self, behavior: DataArray):
+    def _compute_performance(self, behaviors: DataAssembly):
         '''
         Given performance measure and behavior, compute performance w.r.t. current_pulse_mA, condition, object name
-        :param behavior:
-            values: choice,
-            dims:   truth           : 'same_id'==1, 'different_id'==0
-            coords: condition       : list of strings, ['same_id', 'different_id]
+        :param behaviors:
+            values: choice          : 'same_id'==1, 'different_id'==0
+            dims:   condition       : list of strings, ['same_id', 'different_id]
+            coords: truth           : 'same_id'==1, 'different_id'==0
                     object name     : list of strings, category
                     current_pulse_mA: float
-        :return: DataArray:
+        :return: DataAssembly:
             values: performances    : accuracy values
             dims:   condition       : list of strings, ['same_id', 'different_id]
             coords: object_name     : list of strings, category
                     current_pulse_mA: float
         '''
         performance_data = []
-        for object_name, current_pulse_mA, condition in itertools.product(set(behavior.object_name),
-                                                                          set(behavior.current_pulse_mA),
-                                                                          set(behavior.condition)):
-            performance = self._performance_measure(behavior.sel(current_pulse_mA=current_pulse_mA,
-                                                                 condition=condition,
-                                                                 object_name=object_name))
-            performance_array = DataArray(data=performance, dims='condition',
-                                          coords={'condition': condition,
-                                                  'object_name': ('condition', object_name),
-                                                  'current_pulse_mA': ('condition', current_pulse_mA)})
+        for object_name, current_pulse_mA, truth in itertools.product(set(behaviors.object_name.values),
+                                                                      set(behaviors.current_pulse_mA.values),
+                                                                      set(behaviors.truth.values)):
+            behavior = behaviors.sel(current_pulse_mA=current_pulse_mA, truth=truth, object_name=object_name)
+            performance = self._performance_measure(behavior, [truth] * len(behavior))
+            performance_array = DataAssembly(data=[performance.data[0]], dims='condition',
+                                             coords={'condition': [behavior.condition_level_0.values[0]],
+                                                     'object_name': ('condition', [object_name]),
+                                                     'current_pulse_mA': ('condition', [current_pulse_mA])})
             performance_data.append(performance_array)
 
         performances = merge_data_arrays(performance_data)
@@ -205,22 +206,23 @@ class _Moeller2017(BenchmarkBase):
 
     def _set_up_decoder(self, candidate: BrainModel):
         '''
-        Fit a linear regression between the recordings of the training stimuli and the ground truth
+        Fit a logistic regression between the recordings of the training stimuli and the ground truth
         :return: trained linear regressor
         '''
         candidate.start_recording(recording_target='IT', time_bins=[(70, 170)])
         recordings = candidate.look_at(self._training_stimuli)
         samples = 500  # TODO why 500
 
-        stimulus_set = truth = []
-        for object_name in set(recordings.object_name):
+        stimulus_set, truth = [], []
+        for object_name in set(recordings.object_name.values):
             recordings, conditions = self._sample_recordings(recordings.sel(object_name=object_name),
                                                              samples=samples)
             stimulus_set.append(recordings)
-            truth += np.array(conditions) == 'same_id'
+            truth += list((np.array(conditions) == 'same_id').astype(int))
         stimulus_set = np.vstack(stimulus_set)
 
-        return LinearRegression().fit(stimulus_set, truth)
+        return LogisticRegression(random_state=self._seed,
+                                  solver='liblinear').fit(stimulus_set, truth)
 
     def _sample_recordings(self, category_pool: DataArray, samples=500):  # TODO why 500
         '''
@@ -231,24 +233,29 @@ class _Moeller2017(BenchmarkBase):
         :return: array (samples x length of two concatenated recordings), each line contains two recordings
                  ground truth, for each line in array, specifying if the two recordings belong to the same/different ID
         '''
+        # TODO object and image_id disappear with subselection
         rng = np.random.default_rng(seed=self._seed)
-        recording_size = len(category_pool[0].values)
-        random_indeces = rng.integers(0, len(category_pool), (samples, 2))
+        recording_size = category_pool.shape[0]
+        random_indeces = rng.integers(0, category_pool.shape[1], (samples, 2))
 
-        sampled_recordings = np.full((samples, recording_size * 2), np.nan)
-        for i, (random_idx_same, random_idx_different) in enumerate(random_indeces):
+        sampled_recordings = np.full((samples * 2, recording_size * 2), np.nan)
+        for i, (random_idx_same, random_idx_different) in tqdm(enumerate(random_indeces),
+                                                               desc='decoder training recordings'):
             # condition 'same_id': object_id same between recording one and two, image_id different between recording one and two
-            image_one_same = category_pool[random_idx_same]
+            image_one_same = category_pool[:, random_idx_same]
+            same_image_id, same_object_id = image_one_same.presentation.values.item()  # TODO weird xarray behavior, diappearing dimension after selection
             sampled_recordings[i, :recording_size] = image_one_same.values
             sampled_recordings[i, recording_size:] = rng.choice(category_pool.where(
-                category_pool.object_id == image_one_same.object_id and
-                category_pool.image_id != image_one_same.image_id))
+                (category_pool.object_id == same_object_id) &
+                (category_pool.image_id != same_image_id), drop=True).T)
 
             # condition 'different_id': object_id different between recording one and two
-            image_one_diff = category_pool[random_idx_different]
+            image_one_diff = category_pool[:, random_idx_different]
+            diff_object_id = image_one_diff.presentation.values.item()[
+                1]  # TODO weird xarray behavior, diappearing dimension after selection
             sampled_recordings[i + samples, :recording_size] = image_one_diff.values
             sampled_recordings[i + samples, recording_size:] = rng.choice(category_pool.where(
-                category_pool.object_id != image_one_diff.object_id))
+                category_pool.object_id != diff_object_id, drop=True).T)
 
         conditions = ['same_id'] * samples + ['different_id'] * samples
         return sampled_recordings, conditions
@@ -320,7 +327,7 @@ class _Moeller2017(BenchmarkBase):
         d_square = (x - gridx.T) ** 2 + (y - gridy.T) ** 2
         gf = 1. / (2 * np.pi * sigma ** 2) * np.exp(- d_square / (2 * sigma ** 2))
 
-        features_smoothed = DataArray(
+        features_smoothed = DataAssembly(
             data=np.dot(assembly.values.T, gf),
             dims=['category_name', 'voxel_id'],
             coords={'category_name': assembly.category_name.values,
@@ -331,7 +338,7 @@ class _Moeller2017(BenchmarkBase):
         return features_smoothed
 
     @staticmethod
-    def _get_purity_center(selectivity_assembly: DataArray, radius=1):
+    def _get_purity_center(selectivity_assembly: DataAssembly, radius=1):
         '''
         Adapted from Lee et al. 2020 code, not public
         Computes the voxel of the selectivity map with the highest purity
@@ -360,11 +367,11 @@ class _Moeller2017(BenchmarkBase):
         return center_x, center_y
 
     @staticmethod
-    def _determine_face_selectivity(recordings: DataArray):
+    def _determine_face_selectivity(recordings: DataAssembly):
         '''
         Determines face selectivity of each neuroid
-        :param recordings: DataArray
-        :return: DataArray, same as recordings where activations have been replaced with dprime values
+        :param recordings: DataAssembly
+        :return: DataAssembly, same as recordings where activations have been replaced with dprime values
         '''
 
         def mean_var(neuron):
@@ -383,7 +390,7 @@ class _Moeller2017(BenchmarkBase):
             dprime = (face_mean - nonface_mean) / np.sqrt((face_variance + nonface_variance) / 2)
             selectivities.append(dprime)
 
-        selectivity_array = DataArray(
+        selectivity_array = DataAssembly(
             data=selectivities,
             dims=['voxel_id'],
             coords={'voxel_id': recordings.voxel_id.values,
@@ -391,7 +398,7 @@ class _Moeller2017(BenchmarkBase):
                     'voxel_y': ('voxel_id', recordings.voxel_y.values)})
         return selectivity_array
 
-    def _sample_outside_face_patch(self, selectivity_assembly: DataArray, radius=2):
+    def _sample_outside_face_patch(self, selectivity_assembly: DataAssembly, radius=2):
         '''
         Sample one voxel outside of face patch
         1. make a list of voxels where neither the voxel nor its close neighbors are in a face patch
@@ -418,21 +425,21 @@ class _Moeller2017(BenchmarkBase):
         '''
         Load Data from path + subselect as specified by Experiment
 
-        :return: DataArray
+        :return: DataAssembly
         '''
         stimulus_set = self._load_stimulus_set()
         training_stimuli = self._load_training_stimuli()
         stimulus_set_face_patch = self._load_stimulus_set_face_patch()
 
-        # make into dataarray
+        # make into DataAssembly
         data = self._load_target_data()
-        target_assembly = DataArray(data=data['accuracies'], dims='condition',
-                                    coords={'condition': data['condition'],  # same vs. diff
-                                            'object_name': ('condition', data['object_name']),
-                                            'current_pulse_mA': ('condition', data['current_pulse_mA'])},
-                                    attrs={'stimulus_set': stimulus_set,
-                                           'training_stimuli': training_stimuli,
-                                           'stimulus_set_face_patch': stimulus_set_face_patch})
+        target_assembly = DataAssembly(data=data['accuracies'], dims='condition',
+                                       coords={'condition': data['condition'],  # same vs. diff
+                                               'object_name': ('condition', data['object_name']),
+                                               'current_pulse_mA': ('condition', data['current_pulse_mA'])},
+                                       attrs={'stimulus_set': stimulus_set,
+                                              'training_stimuli': training_stimuli,
+                                              'stimulus_set_face_patch': stimulus_set_face_patch})
 
         return target_assembly
 
