@@ -400,6 +400,7 @@ class _Moeller2017(BenchmarkBase):
 
     def _sample_outside_face_patch(self, selectivity_assembly: DataAssembly, radius=2):
         '''
+        # TODO exclude borders from being sampled?
         Sample one voxel outside of face patch
         1. make a list of voxels where neither the voxel nor its close neighbors are in a face patch
         2. randomly sample from list
@@ -410,15 +411,15 @@ class _Moeller2017(BenchmarkBase):
         not_selective_voxels = selectivity_assembly[selectivity_assembly.values < DPRIME_THRESHOLD_SELECTIVITY]
         voxels = []
         for voxel in not_selective_voxels:
-            inside_radius = np.where(np.sqrt(np.square(not_selective_voxels.voxel_x.values - voxel.voxel_x.values) +
-                                             np.square(not_selective_voxels.voxel_y.values - voxel.voxel_y.values))
-                                     < radius)[0]
+            voxel_x, voxel_y = voxel.voxel_id.item()[1:]  # because iteration removes coords somehow
+            inside_radius = np.where(np.sqrt(np.square(not_selective_voxels.voxel_x.values - voxel_x) +
+                                             np.square(not_selective_voxels.voxel_y.values - voxel_y)) < radius)[0]
             if np.all(not_selective_voxels[inside_radius].values < DPRIME_THRESHOLD_FACE_PATCH):
-                voxels.append(voxel)
+                voxels.append(voxel)  # TODO safety if there is tissue where this does not hold
 
         rng = np.random.default_rng(seed=self._seed)
-        voxel = rng.choice(voxels)
-        x, y = voxel.voxel_x, voxel.voxel_y
+        random_idx = rng.integers(0, len(voxels))  # choice removes meta data i.e. location
+        x, y = voxels[random_idx].voxel_id.item()[1:]
         return x, y
 
     def _collect_target_assembly(self):
@@ -605,7 +606,9 @@ def Moeller2017Experiment2():
                                            metric=PerformanceSimilarity(), performance_measure=Accuracy())
 
         def __call__(self, candidate):
-            return self.benchmark1(candidate), self.benchmark2(candidate)
+            import copy
+            candidate_copy = copy.copy(candidate)
+            return self.benchmark1(candidate), self.benchmark2(candidate_copy)
 
     return _Moeller2017Experiment2()
 
