@@ -135,8 +135,8 @@ class _Moeller2017(BenchmarkBase):
                     image_ID    : list of strings, object + view angle identity
         :return: behaviors DataAssembly
             values: choice
-            dims:   truth       : list of int/bool, 'same_id'==1, 'different_id'==0,
-            coords: condition   : list of strings, ['same_id == 1, 'different_id'==0]
+            dims:   condition   : list of strings, ['same_id == 1, 'different_id'==0],
+            coords: truth       : list of int/bool, 'same_id'==1, 'different_id'==0,
                     object_name : list of strings, category
         '''
         samples = 500  # TODO why 500
@@ -145,13 +145,13 @@ class _Moeller2017(BenchmarkBase):
             recordings, conditions = self._sample_recordings(IT_recordings.sel(object_name=object_name),
                                                              samples=samples)
             choices = (decoder.predict(recordings) > .5).astype(int)
-            behavior = DataAssembly(data=choices, dims='condition',
-                                    coords={'condition': conditions,
-                                            'truth': ('condition', (np.array(conditions) == 'same_id').astype(int)),
-                                            'object_name': ('condition', [object_name] * samples * 2)})
+            behavior = DataArray(data=choices, dims='condition',
+                                 coords={'condition': conditions,
+                                         'truth': ('condition', (np.array(conditions) == 'same_id').astype(int)),
+                                         'object_name': ('condition', [object_name] * samples * 2)})
             behavior_data.append(behavior)
 
-        behaviors = merge_data_arrays(behavior_data)
+        behaviors = self._merge_behaviors(behavior_data)
         return behaviors
 
     def _compute_performance(self, behaviors: DataAssembly):
@@ -177,6 +177,7 @@ class _Moeller2017(BenchmarkBase):
             performance = self._performance_measure(behavior, [truth] * len(behavior))
             performance_array = DataAssembly(data=[performance.data[0]], dims='condition',
                                              coords={'condition': [behavior.condition_level_0.values[0]],
+                                                     # because need DataAssembly for .sel above
                                                      'object_name': ('condition', [object_name]),
                                                      'current_pulse_mA': ('condition', [current_pulse_mA])})
             performance_data.append(performance_array)
@@ -587,6 +588,25 @@ class _Moeller2017(BenchmarkBase):
         :return: StimulusSet object, hvm images
         '''
         return brainscore.get_stimulus_set('dicarlo.hvm')
+
+    @staticmethod
+    def _merge_behaviors(arrays):
+        '''
+        Hack because from brainio.assemblies import merge_data_arrays gives
+        an index duplicate error
+        :param arrays:
+        :return:
+        '''
+        if len(arrays) > 1:
+            data = np.concatenate([e.data for e in arrays])
+            conditions = np.concatenate([e.condition.data for e in arrays])
+            truths = np.concatenate([e.truth.data for e in arrays])
+            object_names = np.concatenate([e.object_name.data for e in arrays])
+            return DataAssembly(data=data, dims='condition',
+                                coords={'condition': conditions, 'truth': ('condition', truths),
+                                        'object_name': ('condition', object_names)})
+        else:
+            return DataAssembly(arrays[0])
 
 
 def Moeller2017Experiment1():
