@@ -505,7 +505,8 @@ class _Moeller2017(BenchmarkBase):
             accuracy = df['Hit_' + setup] / (df['Hit_' + setup] + df['Miss_' + setup])
             data['accuracies'] += accuracy.to_list()
             data['condition'] += [condition.lower() + '_id'] * len(accuracy)
-            data['current_pulse_mA'] += df.Current_Pulse_mA.to_list() if stimulation == '_MSC' else [0] * len(accuracy)
+            data['current_pulse_mA'] += [300] * len(accuracy) if stimulation == '_MSC' else [0] * len(accuracy)
+            # works but cannot sel current_pulse_mA: df.Current_Pulse_mA.to_list() if stimulation == '_MSC' else [0] * len(accuracy)
             data['object_name'] += df.Object_Names.to_list()
             data['source'] += df.Monkey.to_list()
 
