@@ -62,7 +62,7 @@ def _load_target_data(stimulus_class, perturbation_location):
                 source              = list, monkey number
     '''
     # statistic for each dataset
-    path = Path(__file__) / 'SummaryMat.xlsx'
+    path = Path(__file__).parent / 'SummaryMat.xlsx'
     df = pd.read_excel(path)
 
     # select relevant lines
@@ -91,7 +91,7 @@ def _load_stimulus_set(stimulus_class):
 
     :return: StimulusSet object containing information about image path, object class and object identity
     '''
-    path = Path(__file__) / stimulus_class
+    path = Path(__file__).parent / stimulus_class
     image_ids = listdir(path)
     object_names, object_ids = [], []
     for image_id in image_ids:
@@ -132,7 +132,7 @@ def _load_training_stimuli():
     :return: StimulusSet Object, same as 'Faces' used in Experiment 1
     '''
     stimulus_class = 'Faces'
-    path = Path(__file__) / stimulus_class
+    path = Path(__file__).parent / stimulus_class
     image_ids = listdir(path)
     object_names, object_ids = [], []
     for image_id in image_ids:
