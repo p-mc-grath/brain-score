@@ -174,6 +174,17 @@ class _Rajalingham2019(BenchmarkBase):
         return np.stack((points_x, points_y), axis=1)
 
 
+def Rajalingham2019DeficitsSignificant():
+    return _Rajalingham2019(identifier='dicarlo.Rajalingham2019-deficits_significant',
+                            metric=SpatialCharacterizationMetric(SignificantCorrelation(x_coord='distance')))
+
+
+def Rajalingham2019SpatialDeficits():
+    return _Rajalingham2019(identifier='dicarlo.Rajalingham2019-spatial_deficit_similarity',
+                            metric=SpatialCharacterizationMetric(
+                                DifferenceOfCorrelations(correlation_variable='distance')))
+
+
 def Rajalingham2019DeficitPredictionTask():
     metric = DeficitPredictionTask()
     return _Rajalingham2019(identifier='dicarlo.Rajalingham2019-deficit_prediction_task',
@@ -222,9 +233,8 @@ def DicarloRajalingham2019SpatialDeficitsQuantified():
 
 
 class SpatialCharacterizationMetric:
-    def __init__(self):
-        # the metric operating on characterized assemblies
-        self._similarity_metric = SignificantCorrelation(x_coord='distances')
+    def __init__(self, similarity_metric):
+        self._similarity_metric = similarity_metric
 
     def __call__(self, behaviors, target):
         dprime_assembly_all = self.characterize(behaviors)
