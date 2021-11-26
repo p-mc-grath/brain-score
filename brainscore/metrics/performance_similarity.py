@@ -41,7 +41,11 @@ class PerformanceSimilarity(Metric):
 
             matching_significant_effect = (significance[0] < alpha) == (significance[1] < alpha)
             matching_effect_direction = change_direction[0] == change_direction[1]
-            same_effect.append(matching_significant_effect and matching_effect_direction)
+            if matching_significant_effect and significance[0] > alpha:
+                effect = matching_effect_direction  # in case not significant, direction does not matter
+            else:
+                effect = matching_significant_effect and matching_effect_direction
+            same_effect.append(effect)
             significances += [(object_name, condition, {'target': significance[0], 'candidate': significance[1]})]
 
         center = np.mean(same_effect)

@@ -12,7 +12,6 @@ from tqdm import tqdm
 from xarray import DataArray
 
 import brainscore
-from model_tools.brain_transformation.tissue.neural_perturbation import MuscimolInjection
 from brainio.assemblies import merge_data_arrays, walk_coords, DataAssembly, array_is_element
 from brainscore.benchmarks import BenchmarkBase
 from brainscore.metrics import Score
@@ -143,7 +142,7 @@ class _Rajalingham2019(BenchmarkBase):
         return behavior
 
     def _sample_injection_locations(self):
-        border_area = MuscimolInjection()._cov * 1  # TODO
+        border_area = 1.17 * 1  # TODO
         injection_locations = np.random.rand(self._num_sites * 10) * (10 - border_area)
         injection_locations = injection_locations[injection_locations > border_area]
         injection_locations = injection_locations[:self._num_sites * 2]
