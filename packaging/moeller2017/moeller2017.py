@@ -8,10 +8,12 @@ from brainio.stimuli import StimulusSet
 from brainio.assemblies import DataAssembly
 
 
-def collect_target_assembly(stimulus_class, perturbation_location):
+def collect_target_assembly(stimulus_class, perturbation_location, accuracy):
     '''
     Load Data from path + subselect as specified by Experiment
-
+    :param stimulus_class: {'Faces', 'Objects', 'Eliciting_Face_Response', 'Abstract_Faces', 'Abstract_Houses'}
+    :param perturbation_location: {'within_facepatch','outside_facepatch'}
+    :param accuracy: boolean flag, indicating whether accuracies or contingency matrices are loaded
     :return: DataAssembly
     '''
     stimulus_set = _load_stimulus_set(stimulus_class)
@@ -19,19 +21,31 @@ def collect_target_assembly(stimulus_class, perturbation_location):
     stimulus_set_face_patch = _load_stimulus_set_face_patch()
 
     # make into DataAssembly
-    data = _load_target_data(stimulus_class, perturbation_location)
-    target_assembly = DataAssembly(data=data['accuracies'], dims='condition',
-                                   coords={'condition': data['condition'],  # same vs. diff
-                                           'object_name': ('condition', data['object_name']),
-                                           'current_pulse_mA': ('condition', data['current_pulse_mA'])},
-                                   attrs={'stimulus_set': stimulus_set,
-                                          'training_stimuli': training_stimuli,
-                                          'stimulus_set_face_patch': stimulus_set_face_patch})
+    if accuracy:
+        data = _load_accuracies(stimulus_class, perturbation_location)
+        target_assembly = DataAssembly(data=data['accuracies'], dims='condition',
+                                       coords={'condition': data['condition'],  # same vs. diff
+                                               'object_name': ('condition', data['object_name']),
+                                               'current_pulse_mA': ('condition', data['current_pulse_mA'])},
+                                       attrs={'stimulus_set': stimulus_set,
+                                              'training_stimuli': training_stimuli,
+                                              'stimulus_set_face_patch': stimulus_set_face_patch})
+    else:
+        data = _load_contingency_tables(stimulus_class, perturbation_location)
+        target_assembly = DataAssembly(data=data['contingency_tables'], dims=['condition', 'statistic', 'stimulation'],
+                                       # TODO check order of dims
+                                       coords={'condition': data['condition'],  # same vs. diff
+                                               'object_name': ('condition', data['object_name']),
+                                               'statistic': ['Hit', 'Miss'],
+                                               'stimulation': [0, 300]},
+                                       attrs={'stimulus_set': stimulus_set,
+                                              'training_stimuli': training_stimuli,
+                                              'stimulus_set_face_patch': stimulus_set_face_patch})
 
     return target_assembly
 
 
-def _load_target_data(stimulus_class, perturbation_location):
+def _load_accuracies(stimulus_class, perturbation_location):
     # TODO deal with data from multiple monkeys
     '''
     From the Results section:
@@ -80,6 +94,63 @@ def _load_target_data(stimulus_class, perturbation_location):
         data['current_pulse_mA'] += [300] * len(accuracy) if stimulation == '_MSC' else [0] * len(accuracy)
         # works but cannot sel current_pulse_mA: df.Current_Pulse_mA.to_list() if stimulation == '_MSC' else [0] * len(accuracy)
         data['object_name'] += df.Object_Names.to_list()
+        data['source'] += df.Monkey.to_list()
+
+    return data
+
+
+def _load_contingency_tables(stimulus_class, perturbation_location):
+    # TODO deal with data from multiple monkeys
+    '''
+    From the Results section:
+    "We first stimulated in the most anterior face patch, AM, previously shown
+    to contain a view-invariant representation of individual identity3."
+
+    "We report maximums across sessions because
+    effect size correlated with accuracy of targeting to the center of the
+    face patch and varied across sessions, as discussed in detail below
+    (Supplementary Tables 1 and 3 give detailed statistics for each
+    session individually; Supplementary Fig. 1 and Supplementary
+    Table 2 summarize the effects for each patch)."
+
+    "We chose AM since it is the
+    most anterior, high-level patch in the system, based on both functional
+    and anatomical criteria3,23. Therefore, if any patch would be expected
+    to code purely faces and not other objects, it would be AM."
+
+    As our methods find the center of the model face patch perfectly, we are working with the values
+    from the sessions with the maximum effects.
+    From Lee et al. 2020 we make the assumption that out in silico face patch is equivalent to AM.
+
+    :return: dictionary with keys:
+                contingency_tables  = list of lists, rows: Hits & Misses, columns: stimulated vs. not w.r.t. keys
+                condition           = list, {same, different}_id
+                object_name         = list, category name
+                source              = list, monkey number
+    '''
+    # statistic for each dataset
+    path = Path(__file__).parent / 'SummaryMat.xlsx'
+    df = pd.read_excel(path)
+
+    # select relevant lines
+    df = df.loc[(df.Stimulus_Class == stimulus_class) &
+                (df.Perturbation_Location == perturbation_location) &
+                (df.Monkey == 1)]  # TODO
+    object_names = df.Object_Names.to_list()
+    # compute accuracies
+    data = {'contingency_tables': [], 'condition': [], 'object_name': [], 'source': []}
+    for condition in ['Same', 'Different']:
+        hits, hits_stim = df['Hit_' + condition], df['Hit_' + condition + '_MSC']
+        misses, misses_stim = df['Miss_' + condition], df['Miss_' + condition + '_MSC']
+        contingency_tables = []
+        for object_name_idx in range(len(object_names)):
+            contingency_table = [[hits.iloc[object_name_idx], hits_stim.iloc[object_name_idx]],
+                                 [misses.iloc[object_name_idx], misses_stim.iloc[object_name_idx]]]
+            contingency_tables.append(contingency_table)
+        data['contingency_tables'] += contingency_tables
+        data['condition'] += [condition.lower() + '_id'] * len(contingency_tables)
+        # works but cannot sel current_pulse_mA: df.Current_Pulse_mA.to_list() if stimulation == '_MSC' else [0] * len(accuracy)
+        data['object_name'] += object_names
         data['source'] += df.Monkey.to_list()
 
     return data
