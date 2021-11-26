@@ -41,11 +41,11 @@ DPRIME_THRESHOLD_FACE_PATCH = .85  # equivalent to .65 in monkey, see Lee et al.
 class _Moeller2017(BenchmarkBase):
 
     def __init__(self, stimulus_class: str, perturbation_location: str, identifier: str,
-                 metric: Metric, performance_measure):
+                 metric: Metric, characterize_behavior):
         '''
         Perform a same vs different identity judgement task on the given dataset
             with and without Microstimulation in the specified location.
-            Compute the behavioral performance on the given performance measure and
+            Compute the behavior, characterize is with the given measure and
             compare it to the equivalent data retrieved from primate experiments.
 
         For each decision, only identities from the same object category are being compared.
@@ -65,12 +65,13 @@ class _Moeller2017(BenchmarkBase):
             bibtex=BIBTEX)
 
         self._metric = metric
-        self._performance_measure = performance_measure
+        self._characterize_behavior = characterize_behavior
         self._perturbations = self._set_up_perturbations(perturbation_location)
         self._stimulus_class = stimulus_class
 
         self._target_assembly = collect_target_assembly(stimulus_class=stimulus_class,
-                                                        perturbation_location=perturbation_location)
+                                                        perturbation_location=perturbation_location,
+                                                        accuracy=identifier.endswith('Accuracy'))  # TODO terrible
         self._stimulus_set = self._target_assembly.stimulus_set
         self._stimulus_set_face_patch = self._target_assembly.stimulus_set_face_patch
         self._training_stimuli = self._target_assembly.training_stimuli
@@ -90,15 +91,15 @@ class _Moeller2017(BenchmarkBase):
         decoder = self._set_up_decoder(candidate)
 
         candidate.start_recording(recording_target='IT', time_bins=[(70, 170)])
-        candidate_performance = []
+        behaviors = []
         for perturbation in self._perturbations:
             behavior = self._perform_task(candidate, perturbation=perturbation,
                                           decoder=decoder)  # TODO move to modeltools
-            performance = self._compute_performance(behavior)
-            candidate_performance.append(performance)
-        candidate_performance = merge_data_arrays(candidate_performance)
+            behaviors.append(behavior)
+        behaviors = self._merge_behaviors(behaviors, including_currents=True)
+        candidate_behavior_characterized = self._characterize_behavior(behaviors)
 
-        score = self._metric(candidate_performance, self._target_assembly)
+        score = self._metric(candidate_behavior_characterized, self._target_assembly)
         return score
 
     def _perform_task(self, candidate: BrainModel, perturbation: dict, decoder):
@@ -149,37 +150,6 @@ class _Moeller2017(BenchmarkBase):
 
         behaviors = self._merge_behaviors(behavior_data)
         return behaviors
-
-    def _compute_performance(self, behaviors: DataAssembly):
-        '''
-        Given performance measure and behavior, compute performance w.r.t. current_pulse_mA, condition, object name
-        :param behaviors:
-            values: choice          : 'same_id'==1, 'different_id'==0
-            dims:   condition       : list of strings, ['same_id', 'different_id]
-            coords: truth           : 'same_id'==1, 'different_id'==0
-                    object name     : list of strings, category
-                    current_pulse_mA: float
-        :return: DataAssembly:
-            values: performances    : accuracy values
-            dims:   condition       : list of strings, ['same_id', 'different_id]
-            coords: object_name     : list of strings, category
-                    current_pulse_mA: float
-        '''
-        performance_data = []
-        for object_name, current_pulse_mA, truth in itertools.product(set(behaviors.object_name.values),
-                                                                      set(behaviors.current_pulse_mA.values),
-                                                                      set(behaviors.truth.values)):
-            behavior = behaviors.sel(current_pulse_mA=current_pulse_mA, truth=truth, object_name=object_name)
-            performance = self._performance_measure(behavior, [truth] * len(behavior))
-            performance_array = DataAssembly(data=[performance.data[0]], dims='condition',
-                                             coords={'condition': [behavior.condition_level_0.values[0]],
-                                                     # because need DataAssembly for .sel above
-                                                     'object_name': ('condition', [object_name]),
-                                                     'current_pulse_mA': ('condition', [current_pulse_mA])})
-            performance_data.append(performance_array)
-
-        performances = merge_data_arrays(performance_data)
-        return performances
 
     def _set_up_perturbations(self, perturbation_location: str):
         '''
@@ -273,6 +243,9 @@ class _Moeller2017(BenchmarkBase):
     def _compute_perturbation_coordinates(self, candidate: BrainModel):
         '''
         Save stimulation coordinates (x,y) to self._perturbation_coordinates
+            For both within and outside face patch the procedures deviate slightly from the procedures in the paper
+            1. face patch: paper determines significant response in fMRI, here fMRI is thresholded according to Lee et al. 2020
+            2. outside face patch: paper uses single electrode to sample non face selective areas, here fMRI is sampled
         :param candidate: BrainModel
         '''
         candidate.start_recording('IT', time_bins=[(50, 100)])
@@ -433,7 +406,7 @@ class _Moeller2017(BenchmarkBase):
         return x, y
 
     @staticmethod
-    def _merge_behaviors(arrays):
+    def _merge_behaviors(arrays, including_currents=False):
         '''
         Hack because from brainio.assemblies import merge_data_arrays gives
         an index duplicate error
@@ -445,9 +418,16 @@ class _Moeller2017(BenchmarkBase):
             conditions = np.concatenate([e.condition.data for e in arrays])
             truths = np.concatenate([e.truth.data for e in arrays])
             object_names = np.concatenate([e.object_name.data for e in arrays])
-            return DataAssembly(data=data, dims='condition',
-                                coords={'condition': conditions, 'truth': ('condition', truths),
-                                        'object_name': ('condition', object_names)})
+            if including_currents:
+                currents = np.concatenate([e.current_pulse_mA.data for e in arrays])
+                return DataAssembly(data=data, dims='condition',
+                                    coords={'condition': conditions, 'truth': ('condition', truths),
+                                            'object_name': ('condition', object_names),
+                                            'current_pulse_mA': ('condition', currents)})
+            else:
+                return DataAssembly(data=data, dims='condition',
+                                    coords={'condition': conditions, 'truth': ('condition', truths),
+                                            'object_name': ('condition', object_names)})
         else:
             return DataAssembly(arrays[0])
 
@@ -461,7 +441,7 @@ def Moeller2017Experiment1():
                         perturbation_location='within_facepatch',
                         identifier='dicarlo.Moeller2017-Experiment_1',
                         metric=PerformanceSimilarity(),
-                        performance_measure=Accuracy())
+                        characterize_behavior=create_contingency_tables)
 
 
 def Moeller2017Experiment2():
@@ -478,10 +458,12 @@ def Moeller2017Experiment2():
                 identifier='dicarlo.Moeller2017-Experiment_2', ceiling_func=None, version=1, parent='IT', bibtex=BIBTEX)
             self.benchmark1 = _Moeller2017(stimulus_class='Faces', perturbation_location='outside_facepatch',
                                            identifier='dicarlo.Moeller2017-Experiment_2i',
-                                           metric=PerformanceSimilarity(), performance_measure=Accuracy())
+                                           metric=PerformanceSimilarity(),
+                                           characterize_behavior=create_contingency_tables)
             self.benchmark2 = _Moeller2017(stimulus_class='Objects', perturbation_location='within_facepatch',
                                            identifier='dicarlo.Moeller2017-Experiment_2ii',
-                                           metric=PerformanceSimilarity(), performance_measure=Accuracy())
+                                           metric=PerformanceSimilarity(),
+                                           characterize_behavior=create_contingency_tables)
 
         def __call__(self, candidate):
             import copy
@@ -500,7 +482,7 @@ def Moeller2017Experiment3():
                         perturbation_location='within_facepatch',
                         identifier='dicarlo.Moeller2017-Experiment_3',
                         metric=PerformanceSimilarity(),
-                        performance_measure=Accuracy())
+                        characterize_behavior=create_contingency_tables)
 
 
 def Moeller2017Experiment4a():
@@ -512,7 +494,7 @@ def Moeller2017Experiment4a():
                         perturbation_location='within_facepatch',
                         identifier='dicarlo.Moeller2017-Experiment_4a',
                         metric=PerformanceSimilarity(),
-                        performance_measure=Accuracy())
+                        characterize_behavior=create_contingency_tables)
 
 
 def Moeller2017Experiment4b():
@@ -524,4 +506,155 @@ def Moeller2017Experiment4b():
                         perturbation_location='within_facepatch',
                         identifier='dicarlo.Moeller2017-Experiment_4b',
                         metric=PerformanceSimilarity(),
-                        performance_measure=Accuracy())
+                        characterize_behavior=create_contingency_tables)
+
+
+def Moeller2017Experiment1Accuracy():
+    '''
+    Stimulate face patch during face identification
+    32 identities; 6 expressions each
+    '''
+    return _Moeller2017(stimulus_class='Faces',
+                        perturbation_location='within_facepatch',
+                        identifier='dicarlo.Moeller2017-Experiment_1Accuracy',
+                        metric=no_metric,
+                        characterize_behavior=compute_accuracy)
+
+
+def Moeller2017Experiment2Accuracy():
+    '''
+    TODO  very unclean
+    i: Stimulate outside of the face patch during face identification
+    ii: Stimulate face patch during object identification
+    28 Objects; 3 viewing angles each
+    '''
+
+    class _Moeller2017Experiment2Accuracy(BenchmarkBase):
+        def __init__(self):
+            super().__init__(
+                identifier='dicarlo.Moeller2017-Experiment_2', ceiling_func=None, version=1, parent='IT', bibtex=BIBTEX)
+            self.benchmark1 = _Moeller2017(stimulus_class='Faces', perturbation_location='outside_facepatch',
+                                           identifier='dicarlo.Moeller2017-Experiment_2iAccuracy',
+                                           metric=no_metric,
+                                           characterize_behavior=compute_accuracy)
+            self.benchmark2 = _Moeller2017(stimulus_class='Objects', perturbation_location='within_facepatch',
+                                           identifier='dicarlo.Moeller2017-Experiment_2iiAccuracy',
+                                           metric=no_metric,
+                                           characterize_behavior=compute_accuracy)
+
+        def __call__(self, candidate):
+            import copy
+            candidate_copy = copy.copy(candidate)
+            return self.benchmark1(candidate), self.benchmark2(candidate_copy)
+
+    return _Moeller2017Experiment2Accuracy()
+
+
+def Moeller2017Experiment3Accuracy():
+    '''
+    Stimulate face patch during face & non-face object eliciting patch response identification
+    15 black & white round objects + faces; 3 exemplars per category  (apples, citrus, teapots, alarmclocks, faces)
+    '''
+    return _Moeller2017(stimulus_class='Eliciting_Face_Response',
+                        perturbation_location='within_facepatch',
+                        identifier='dicarlo.Moeller2017-Experiment_3Accuracy',
+                        metric=no_metric,
+                        characterize_behavior=compute_accuracy)
+
+
+def Moeller2017Experiment4aAccuracy():
+    '''
+    Stimulate face patch during abstract face identification
+    16 Face Abtractions; 4 per category (Line Drawings, Silhouettes, Cartoons, Mooney Faces)
+    '''
+    return _Moeller2017(stimulus_class='Abstract_Faces',
+                        perturbation_location='within_facepatch',
+                        identifier='dicarlo.Moeller2017-Experiment_4aAccuracy',
+                        metric=no_metric,
+                        characterize_behavior=compute_accuracy)
+
+
+def Moeller2017Experiment4bAccuracy():
+    '''
+    Stimulate face patch during face & abstract houses identification
+    20 Abstract Houses & Faces; 4 per category (House Line Drawings, House Cartoons, House Silhouettes, Mooney Faces, Mooney Faces up-side-down)
+    '''
+    return _Moeller2017(stimulus_class='Abstract_Houses',
+                        perturbation_location='within_facepatch',
+                        identifier='dicarlo.Moeller2017-Experiment_4bAccuracy',
+                        metric=no_metric,
+                        characterize_behavior=compute_accuracy)
+
+
+def compute_accuracy(behaviors: DataAssembly):
+    '''
+    Given performance measure and behavior, compute performance w.r.t. current_pulse_mA, condition, object name
+    :param behaviors:
+        values: choice          : 'same_id'==1, 'different_id'==0
+        dims:   condition       : list of strings, ['same_id', 'different_id]
+        coords: truth           : 'same_id'==1, 'different_id'==0
+                object name     : list of strings, category
+                current_pulse_mA: float
+    :return: DataAssembly:
+        values: performances    : accuracy values
+        dims:   condition       : list of strings, ['same_id', 'different_id]
+        coords: object_name     : list of strings, category
+                current_pulse_mA: float
+    '''
+    performance_measure = Accuracy()
+    performance_data = []
+    for object_name, current_pulse_mA, truth in itertools.product(set(behaviors.object_name.values),
+                                                                  set(behaviors.current_pulse_mA.values),
+                                                                  set(behaviors.truth.values)):
+        behavior = behaviors.sel(current_pulse_mA=current_pulse_mA, truth=truth, object_name=object_name)
+        performance = performance_measure(behavior, [truth] * len(behavior))
+        performance_array = DataAssembly(data=[performance.data[0]], dims='condition',
+                                         coords={'condition': [behavior.condition_level_0.values[0][0]],
+                                                 # because need DataAssembly for .sel above
+                                                 'object_name': ('condition', [object_name]),
+                                                 'current_pulse_mA': ('condition', [current_pulse_mA])})
+        performance_data.append(performance_array)
+
+    performances = merge_data_arrays(performance_data)
+    return performances
+
+
+def create_contingency_tables(behaviors: DataAssembly):
+    '''
+    Given performance measure and behavior, compute performance w.r.t. current_pulse_mA, condition, object name
+    :param behaviors:
+        values: choice          : 'same_id'==1, 'different_id'==0
+        dims:   condition       : list of strings, ['same_id', 'different_id]
+        coords: truth           : 'same_id'==1, 'different_id'==0
+                object name     : list of strings, category
+                current_pulse_mA: float
+    :return: DataAssembly:
+        values: performances    : accuracy values
+        dims:   condition       : list of strings, ['same_id', 'different_id]
+        coords: object_name     : list of strings, category
+                current_pulse_mA: float
+    '''
+    contingency_table_data = []
+    for object_name, truth in itertools.product(set(behaviors.object_name.values), set(behaviors.truth.values)):
+        behavior_non = behaviors.sel(truth=truth, object_name=object_name, current_pulse_mA=0)
+        behavior_stim = behaviors.sel(truth=truth, object_name=object_name, current_pulse_mA=300)
+        hits = np.sum(np.array(behavior_non.values) == truth)
+        hits_stim = np.sum(np.array(behavior_stim.values) == truth)
+        misses = len(behavior_non.values) - hits
+        misses_stim = len(behavior_stim.values) - hits_stim
+        contingency_table = [[[hits, hits_stim], [misses, misses_stim]]]
+        condition = 'same_id' if truth == 1 else 'different_id'
+        assembly = DataAssembly(data=contingency_table,
+                                dims=['condition', 'statistic', 'stimulation'],
+                                coords={'condition': [condition],  # same vs. diff
+                                        'object_name': ('condition', [object_name]),
+                                        'statistic': ['Hit', 'Miss'],
+                                        'stimulation': [0, 300]})
+        contingency_table_data.append(assembly)
+
+    contingency_table_data = merge_data_arrays(contingency_table_data)
+    return contingency_table_data
+
+
+def no_metric(candidate, target):
+    return candidate, target
