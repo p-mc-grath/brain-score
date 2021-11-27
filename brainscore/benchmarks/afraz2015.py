@@ -76,6 +76,8 @@ class _Afraz2015Optogenetics(BenchmarkBase):
         #  that they could generalize the learning to novel stimuli"
         self._fitting_stimuli, test_stimuli = split_train_test(gender_stimuli, random_state=RandomState(42),
                                                                num_training=400, num_testing=400)
+        self._num_face_detector_sites = 17  # "photosuppression at high-FD sites (n = 17 sites) [...]"
+
         self._assembly = self.collect_assembly()
         self._assembly.attrs['stimulus_set'] = test_stimuli
         self._metric = metric
@@ -133,10 +135,10 @@ class _Afraz2015Optogenetics(BenchmarkBase):
     def subselect_recordings(self, recordings):
         # We here randomly sub-select the recordings to match the number of stimulation sites in the experiment, based
         # on the assumption that we can compare trend effects even with a random sample.
-        num_face_detector_sites = 17  # "photosuppression at high-FD sites (n = 17 sites) [...]"
-        num_nonface_detector_sites = 40 - 17  # "40 experimental sessions" minus the 17 high-FD sites
+        num_nonface_detector_sites = 40 - self._num_face_detector_sites  # "40 experimental sessions" minus face sites
         face_detector_sites, nonface_detector_sites = find_selective_sites(
-            num_face_detector_sites=num_face_detector_sites, num_nonface_detector_sites=num_nonface_detector_sites,
+            num_face_detector_sites=self._num_face_detector_sites,
+            num_nonface_detector_sites=num_nonface_detector_sites,
             recordings=recordings)
         recordings = recordings[{'neuroid': [neuroid_id in (face_detector_sites + nonface_detector_sites)
                                              for neuroid_id in recordings['neuroid_id'].values]}]
@@ -196,9 +198,8 @@ class _Afraz2015OptogeneticOverallAccuracy(_Afraz2015Optogenetics):
     def subselect_recordings(self, recordings):
         # We here randomly sub-select the recordings to match the number of stimulation sites in the experiment, based
         # on the assumption that we can compare trend effects even with a random sample.
-        num_face_detector_sites = 17
         face_detector_sites, _ = find_selective_sites(
-            num_face_detector_sites=num_face_detector_sites, num_nonface_detector_sites=0, recordings=recordings)
+            num_face_detector_sites=self._num_face_detector_sites, num_nonface_detector_sites=0, recordings=recordings)
         recordings = recordings[{'neuroid': [neuroid_id in face_detector_sites
                                              for neuroid_id in recordings['neuroid_id'].values]}]
         return recordings
@@ -280,14 +281,14 @@ def Afraz2015MuscimolDeltaAccuracySignificant():
         score.attrs['delta_accuracies'] = delta_accuracies
         return score
 
-    return _Afraz2015MuscimolDeltaAccuracy(metric_identifier='delta_accuracy_significant',
-                                           metric=metric)
+    return _Afraz2015Muscimol(metric_identifier='delta_accuracy_significant',
+                              metric=metric)
 
 
 def Afraz2015MuscimolDeltaAccuracyFace():
     metric = functools.partial(facenonface_difference_of_fractions, face=True)
-    return _Afraz2015MuscimolDeltaAccuracy(metric_identifier='delta_accuracy_face',
-                                           metric=metric)
+    return _Afraz2015Muscimol(metric_identifier='delta_accuracy_face',
+                              metric=metric)
 
 
 def facenonface_difference_of_fractions(delta_accuracies, assembly_accuracies, face: bool):
@@ -311,11 +312,11 @@ def facenonface_difference_of_fractions(delta_accuracies, assembly_accuracies, f
 
 def Afraz2015MuscimolDeltaAccuracyNonFace():
     metric = functools.partial(facenonface_difference_of_fractions, face=False)
-    return _Afraz2015MuscimolDeltaAccuracy(metric_identifier='delta_accuracy_nonface',
-                                           metric=metric)
+    return _Afraz2015Muscimol(metric_identifier='delta_accuracy_nonface',
+                              metric=metric)
 
 
-class _Afraz2015MuscimolDeltaAccuracy(BenchmarkBase):
+class _Afraz2015Muscimol(BenchmarkBase):
     def __init__(self, metric_identifier, metric):
         self._logger = logging.getLogger(fullname(self))
         gender_stimuli, self._selectivity_stimuli = load_stimuli()
@@ -325,10 +326,15 @@ class _Afraz2015MuscimolDeltaAccuracy(BenchmarkBase):
         # "For muscimol experiments, because the test blocks were shorter, smaller image sets (200 images) were used."
         self._fitting_stimuli, test_stimuli = split_train_test(gender_stimuli, random_state=RandomState(1),
                                                                num_training=400, num_testing=200)
+        # "Face-detector sites, summarizes data shown in A (n = 6 microinjections);
+        # other IT sites, micro- injections away from high-FD subregions of IT (n = 6)"
+        self._num_face_detector_sites = 6
+        self._num_nonface_detector_sites = 6
+
         self._assembly = muscimol_delta_overall_accuracy()
         self._assembly.attrs['stimulus_set'] = test_stimuli
         self._metric = metric
-        super(_Afraz2015MuscimolDeltaAccuracy, self).__init__(
+        super(_Afraz2015Muscimol, self).__init__(
             identifier='dicarlo.Afraz2015.muscimol-' + metric_identifier,
             ceiling_func=None,
             version=1, parent='IT',
@@ -348,17 +354,8 @@ class _Afraz2015MuscimolDeltaAccuracy(BenchmarkBase):
         candidate.start_recording('IT', time_bins=[(50, 100)])
         recordings = candidate.look_at(self._selectivity_stimuli)
 
-        # "Face-detector sites, summarizes data shown in A (n = 6 microinjections);
-        # other IT sites, micro- injections away from high-FD subregions of IT (n = 6)"
-        # We here randomly sub-select the recordings to match the number of stimulation sites in the experiment, based
-        # on the assumption that we can compare trend effects even with a random sample.
-        num_face_detector_sites = 6
-        num_nonface_detector_sites = 6
-        face_detector_sites, nonface_detector_sites = find_selective_sites(
-            num_face_detector_sites=num_face_detector_sites, num_nonface_detector_sites=num_nonface_detector_sites,
-            recordings=recordings)
-        recordings = recordings[{'neuroid': [neuroid_id in (face_detector_sites + nonface_detector_sites)
-                                             for neuroid_id in recordings['neuroid_id'].values]}]
+        # sub-select neurons to match sites in experiment
+        recordings = self.subselect_recordings(recordings)
 
         # "In practice, we first trained the animals on a fixed set of 400 images (200 males and 200 females)."
         candidate.start_task(BrainModel.Task.probabilities, fitting_stimuli=self._fitting_stimuli)
@@ -374,7 +371,6 @@ class _Afraz2015MuscimolDeltaAccuracy(BenchmarkBase):
                               target='IT', perturbation_parameters={
                     **{'location': location}, **MUSCIMOL_PARAMETERS})
             behavior = candidate.look_at(self._assembly.stimulus_set)
-            candidate.perturb(perturbation=None, target='IT')  # reset
             behavior = behavior.expand_dims('site')
             behavior['site_iteration'] = 'site', [site]
             behavior['site_x'] = 'site', [location[0]]
@@ -394,7 +390,19 @@ class _Afraz2015MuscimolDeltaAccuracy(BenchmarkBase):
 
         # compute score
         score = self._metric(delta_accuracies, self._assembly)
+        score.attrs['delta_accuracies'] = delta_accuracies
         return score
+
+    def subselect_recordings(self, recordings):
+        # We here randomly sub-select the recordings to match the number of stimulation sites in the experiment, based
+        # on the assumption that we can compare trend effects even with a random sample.
+        face_detector_sites, nonface_detector_sites = find_selective_sites(
+            num_face_detector_sites=self._num_face_detector_sites,
+            num_nonface_detector_sites=self._num_nonface_detector_sites,
+            recordings=recordings)
+        recordings = recordings[{'neuroid': [neuroid_id in (face_detector_sites + nonface_detector_sites)
+                                             for neuroid_id in recordings['neuroid_id'].values]}]
+        return recordings
 
 
 def is_significantly_different(assembly, between, significance_threshold=0.05):
